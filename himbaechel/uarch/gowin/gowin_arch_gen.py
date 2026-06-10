@@ -884,6 +884,19 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                 for pin, wire in desc['inputs'].items():
                     tt.create_wire(wire, "PLL_I")
                     tt.add_bel_pin(pll, pin, wire, PinType.INPUT)
+        elif func == 'bpll':
+                # GW5AST-138C bottom-edge PLL. The primitive is `PLL` (not PLLA),
+                # so the bel type is "PLL" (id_PLL) - see isValidBelForCellType.
+                pll = tt.create_bel("PLL", "PLL", z = PLL_Z)
+                pll.flags = BEL_FLAG_GLOBAL
+                for pin, wire in desc['outputs'].items():
+                    if not tt.has_wire(wire):
+                        tt.create_wire(wire, "PLL_O")
+                    tt.add_bel_pin(pll, pin, wire, PinType.OUTPUT)
+                for pin, wire in desc['inputs'].items():
+                    if not tt.has_wire(wire):
+                        tt.create_wire(wire, "PLL_I")
+                    tt.add_bel_pin(pll, pin, wire, PinType.INPUT)
         elif func == 'adc':
                 pll = tt.create_bel("ADC", "ADC", z = ADC_Z)
                 for pin, wire in desc['outputs'].items():

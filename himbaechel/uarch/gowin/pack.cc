@@ -159,8 +159,30 @@ void GowinPacker::pack_pll(void)
     for (auto &cell : ctx->cells) {
         auto &ci = *cell.second;
 
-        if (ci.type.in(id_rPLL, id_PLLVR, id_PLLA)) {
+        if (ci.type.in(id_rPLL, id_PLLVR, id_PLLA, id_PLL)) {
             gwu.remove_brackets(&ci);
+
+            // GW5AST-138C bottom-edge PLL (id_PLL): the divider/enable config is
+            // encoded entirely via cell PARAMETERS (IDIV_SEL/FBDIV_SEL/MDIV_SEL/
+            // ODIVn_SEL/CLKOUTn_EN), baked to fuses by gowin_pack. The static
+            // control PORTS (ENCLKn, *DSEL, DTn, PSSEL, ...) carry no routed net,
+            // so disconnect everything except the clock I/O the bel actually has
+            // bel-pins for. This keeps the router from chasing pins with no wire.
+            if (ci.type == id_PLL) {
+                const pool<IdString> bpll_keep_ports = {
+                        id_CLKIN, id_CLKFB, id_RESET, ctx->id("PLLPWD"), id_LOCK,
+                        id_CLKOUT0, id_CLKOUT1, id_CLKOUT2, id_CLKOUT3,
+                        id_CLKOUT4, id_CLKOUT5, id_CLKOUT6};
+                std::vector<IdString> to_drop;
+                for (auto &port : ci.ports) {
+                    if (!bpll_keep_ports.count(port.first))
+                        to_drop.push_back(port.first);
+                }
+                for (auto pn : to_drop) {
+                    ci.disconnectPort(pn);
+                    ci.ports.erase(pn);
+                }
+            }
 
             // If CLKIN is connected to a special pin, then it makes sense
             // to try to place the PLL so that it uses a direct connection
