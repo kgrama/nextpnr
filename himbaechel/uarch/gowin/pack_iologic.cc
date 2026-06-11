@@ -277,6 +277,11 @@ CellInfo *GowinPacker::create_aux_iologic_cell(CellInfo &ci, IdString mode, bool
 
 void GowinPacker::reconnect_ides_outs(CellInfo *ci)
 {
+    if (gwu.has_5A_HCLK()) {
+        // GW5A IOLOGIC exposes the deserializer outputs on native Q0..Q7
+        // wires (Q8/Q9 map to fabric F0/F1 there) - no remap.
+        return;
+    }
     IdString dest_ports[] = {id_Q9, id_Q8, id_Q7, id_Q6, id_Q5, id_Q4, id_Q3, id_Q2};
     switch (ci->type.hash()) {
     case ID_IDDR: /* fall-through*/
