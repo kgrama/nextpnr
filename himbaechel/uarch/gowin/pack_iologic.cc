@@ -137,6 +137,10 @@ void GowinPacker::pack_bi_output_iol(CellInfo &ci, std::vector<IdString> &nets_t
     case ID_OSER8:
         out_mode = "ODDRX4";
         break;
+    case ID_OSER8_MEM:
+        out_mode = "MODDRX4";
+        ci.disconnectPort(id_TCLK);
+        break;
     }
     ci.setParam(ctx->id("OUTMODE"), out_mode);
 
@@ -336,6 +340,14 @@ void GowinPacker::pack_ides_iol(CellInfo &ci, std::vector<IdString> &nets_to_rem
         break;
     case ID_IDES8:
         in_mode = "IDDRX4";
+        break;
+    case ID_IDES8_MEM:
+        in_mode = "MIDDRX4";
+        for (int i = 0; i < 3; ++i) {
+            ci.disconnectPort(ctx->idf("WADDR[%d]", i));
+            ci.disconnectPort(ctx->idf("RADDR[%d]", i));
+        }
+        ci.disconnectPort(id_ICLK);
         break;
     case ID_IDES10:
         in_mode = "IDDRX5";
@@ -635,7 +647,7 @@ void GowinPacker::pack_iologic(void)
         if (ctx->debug) {
             log_info("pack %s of type %s.\n", ctx->nameOf(&ci), ci.type.c_str(ctx));
         }
-        if (ci.type.in(id_ODDR, id_ODDRC, id_OSER4, id_OSER8)) {
+        if (ci.type.in(id_ODDR, id_ODDRC, id_OSER4, id_OSER8, id_OSER8_MEM)) {
             pack_bi_output_iol(ci, nets_to_remove);
             create_aux_iologic_cell(ci, ctx->id("OUTMODE"));
             continue;
@@ -645,7 +657,7 @@ void GowinPacker::pack_iologic(void)
             create_aux_iologic_cell(ci, ctx->id("OUTMODE"));
             continue;
         }
-        if (ci.type.in(id_IDDR, id_IDDRC, id_IDES4, id_IDES8, id_IDES10, id_IVIDEO, id_IOLOGICI_EMPTY)) {
+        if (ci.type.in(id_IDDR, id_IDDRC, id_IDES4, id_IDES8, id_IDES8_MEM, id_IDES10, id_IVIDEO, id_IOLOGICI_EMPTY)) {
             pack_ides_iol(ci, nets_to_remove);
             create_aux_iologic_cell(ci, ctx->id("INMODE"));
             continue;

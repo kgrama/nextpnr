@@ -955,13 +955,13 @@ void GowinImpl::postRoute()
                                     log_info("set IOLOGIC_FCLK to %s\n", up_wire_name.c_str(ctx));
                                 }
                             }
-                        } else if (up_wire_name.in(id_HCLK00, id_HCLK10, id_HCLK20, id_HCLK30)) {
+                        } else if (up_wire_name.in(id_HCLK00, id_HCLK10, id_HCLK20, id_HCLK30, id_HCLK40, id_HCLK50)) {
                             user.cell->setAttr(id_IOLOGIC_FCLK, Property("HCLK_OUT0"));
-                        } else if (up_wire_name.in(id_HCLK01, id_HCLK11, id_HCLK21, id_HCLK31)) {
+                        } else if (up_wire_name.in(id_HCLK01, id_HCLK11, id_HCLK21, id_HCLK31, id_HCLK41, id_HCLK51)) {
                             user.cell->setAttr(id_IOLOGIC_FCLK, Property("HCLK_OUT1"));
-                        } else if (up_wire_name.in(id_HCLK02, id_HCLK12, id_HCLK22, id_HCLK32)) {
+                        } else if (up_wire_name.in(id_HCLK02, id_HCLK12, id_HCLK22, id_HCLK32, id_HCLK42, id_HCLK52)) {
                             user.cell->setAttr(id_IOLOGIC_FCLK, Property("HCLK_OUT2"));
-                        } else if (up_wire_name.in(id_HCLK03, id_HCLK13, id_HCLK23, id_HCLK33)) {
+                        } else if (up_wire_name.in(id_HCLK03, id_HCLK13, id_HCLK23, id_HCLK33, id_HCLK43, id_HCLK53)) {
                             user.cell->setAttr(id_IOLOGIC_FCLK, Property("HCLK_OUT3"));
                         }
                         if (ctx->debug) {
