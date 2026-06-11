@@ -278,8 +278,23 @@ CellInfo *GowinPacker::create_aux_iologic_cell(CellInfo &ci, IdString mode, bool
 void GowinPacker::reconnect_ides_outs(CellInfo *ci)
 {
     if (gwu.has_5A_HCLK()) {
-        // GW5A IOLOGIC exposes the deserializer outputs on native Q0..Q7
-        // wires (Q8/Q9 map to fabric F0/F1 there) - no remap.
+        // GW5A IOLOGIC (16-slot, IDES16-capable): deserializer outputs sit on
+        // port slots Q8..Q15 (fabric wires F0..F5,F7,OF0 - decoded from a
+        // gw_sh GW5AST-138C bitstream). TODO: IDES4/IDES10/IVIDEO oracles.
+        switch (ci->type.hash()) {
+        case ID_IDES8:
+            for (int i = 0; i < 8; ++i) {
+                ci->renamePort(ctx->idf("Q%d", i), ctx->idf("Q%d", 8 + i));
+            }
+            break;
+        case ID_IDDR: /* fall-through */
+        case ID_IDDRC:
+            ci->renamePort(id_Q0, id_Q8);
+            ci->renamePort(id_Q1, id_Q9);
+            break;
+        default:
+            break;
+        }
         return;
     }
     IdString dest_ports[] = {id_Q9, id_Q8, id_Q7, id_Q6, id_Q5, id_Q4, id_Q3, id_Q2};
