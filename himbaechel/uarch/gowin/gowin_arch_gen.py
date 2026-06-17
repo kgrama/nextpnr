@@ -74,6 +74,25 @@ DHCEN_Z = 288 # : 298
 
 USERFLASH_Z = 298
 
+# Fuzzed GW5AST-138C hard cells — bel Z slots (high range to avoid collisions).
+FUZZED_Z_BASE = 400
+_FUZZED_BEL_Z = {
+    'DQS': 400, 'DDRDLL': 401, 'IODELAY': 402, 'PLL': 403, 'SDPB': 404, 'DSP': 405,
+}
+# Port lists (name, 'i'/'o') from the GW5A vendor prim_sim — the cells we fuzzed.
+_FUZZED_CELL_PORTS = {
+    'DQS': [('DQSIN','i'),('PCLK','i'),('FCLK','i'),('RESET','i'),('READ','i'),
+            ('RCLKSEL','i'),('DLLSTEP','i'),('WSTEP','i'),
+            ('DQSR90','o'),('DQSW0','o'),('DQSW270','o'),('RVALID','o'),('RFLAG','o'),('WFLAG','o')],
+    'DDRDLL': [('CLKIN','i'),('STOP','i'),('RESET','i'),('UPDNCNTL','i'),('STEP','o'),('LOCK','o')],
+    'IODELAY': [('DI','i'),('SDTAP','i'),('VALUE','i'),('DLYSTEP','i'),('DO','o'),('DF','o')],
+    'PLL': [('CLKIN','i'),('CLKFB','i'),('RESET','i'),('ICPSEL','i'),('LPFRES','i'),('LPFCAP','i'),
+            ('CLKOUT0','o'),('CLKOUT1','o'),('CLKOUT2','o'),('CLKOUT3','o'),('LOCK','o')],
+    'SDPB': [('CLKA','i'),('CLKB','i'),('RESET','i'),('CEA','i'),('CEB','i'),('OCE','i'),
+             ('ADA','i'),('ADB','i'),('DI','i'),('DO','o')],
+    'DSP': [('A','i'),('B','i'),('D','i'),('CLK','i'),('CE','i'),('RESET','i'),('DOUT','o')],
+}
+
 EMCU_Z      = 300
 
 MIPIOBUF_Z  = 301
@@ -791,6 +810,22 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                 if not tt.has_wire(wire):
                     tt.create_wire(wire)
                 tt.add_bel_pin(bel, "SELFORCE", wire, PinType.INPUT)
+        elif func == 'fuzzed':
+            # Fuzzed GW5AST-138C hard cells (DQS/DDRDLL/IODELAY/DCS/SDPB/DSP/PLL/...).
+            # Bel locations from fuzzing (apicula fse_create_gw5ast_fuzzed_cells); create a
+            # REAL bel (not a blackbox) at each, with its ports from the GW5A prim list as
+            # fresh local wires.  This makes the cell PLACEABLE by nextpnr.  Routing pips to
+            # these wires are added separately (the differential fuzz gives the bel+fuses;
+            # full wire connectivity is a follow-up fuzz).
+            for cellname, info in desc.items():
+                belz = _FUZZED_BEL_Z.get(cellname, FUZZED_Z_BASE + len(tt.bels))
+                bel = tt.create_bel(cellname, cellname, z = belz)
+                for pin, pdir in _FUZZED_CELL_PORTS.get(cellname, []):
+                    wname = f'{cellname}_{pin}_X{x}Y{y}'
+                    if not tt.has_wire(wname):
+                        tt.create_wire(wname)
+                    tt.add_bel_pin(bel, pin, wname,
+                                   PinType.OUTPUT if pdir == 'o' else PinType.INPUT)
         elif func == 'io16':
             role = desc['role']
             if role == 'MAIN':
