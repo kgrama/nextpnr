@@ -86,8 +86,13 @@ _FUZZED_CELL_PORTS = {
             ('DQSR90','o'),('DQSW0','o'),('DQSW270','o'),('RVALID','o'),('RFLAG','o'),('WFLAG','o')],
     'DDRDLL': [('CLKIN','i'),('STOP','i'),('RESET','i'),('UPDNCNTL','i'),('STEP','o'),('LOCK','o')],
     'IODELAY': [('DI','i'),('SDTAP','i'),('VALUE','i'),('DLYSTEP','i'),('DO','o'),('DF','o')],
-    'PLL': [('CLKIN','i'),('CLKFB','i'),('RESET','i'),('ICPSEL','i'),('LPFRES','i'),('LPFCAP','i'),
-            ('CLKOUT0','o'),('CLKOUT1','o'),('CLKOUT2','o'),('CLKOUT3','o'),('LOCK','o')],
+    # GW5A PLL: 7 outputs CLKOUT0..6 + LOCK; config inputs incl fractional/SSC + trim.
+    'PLL': [('CLKIN','i'),('CLKFB','i'),('RESET','i'),('PLLPWD','i'),
+            ('ICPSEL','i'),('LPFRES','i'),('LPFCAP','i'),
+            ('FBDSEL','i'),('IDSEL','i'),('ODSEL0','i'),('MDSEL','i'),
+            ('MDSEL_FRAC','i'),('ODSEL0_FRAC','i'),('SSCON','i'),('SSCMDSEL','i'),
+            ('CLKOUT0','o'),('CLKOUT1','o'),('CLKOUT2','o'),('CLKOUT3','o'),
+            ('CLKOUT4','o'),('CLKOUT5','o'),('CLKOUT6','o'),('CLKFBOUT','o'),('LOCK','o')],
     'SDPB': [('CLKA','i'),('CLKB','i'),('RESET','i'),('CEA','i'),('CEB','i'),('OCE','i'),
              ('ADA','i'),('ADB','i'),('DI','i'),('DO','o')],
     'DSP': [('A','i'),('B','i'),('D','i'),('CLK','i'),('CE','i'),('RESET','i'),('DOUT','o')],
@@ -818,6 +823,12 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
             # these wires are added separately (the differential fuzz gives the bel+fuses;
             # full wire connectivity is a follow-up fuzz).
             for cellname, info in desc.items():
+                # PLL is handled by the routed 'bpll' bel (z=PLL_Z, with clock routing);
+                # do NOT create duplicate unrouted PLL bels here (the placer would pick an
+                # unrouted one -> clock-route failure).  The 12-site PLL placement needs
+                # per-site clock-routing fuzz before those bels are usable; skip for now.
+                if cellname == 'PLL':
+                    continue
                 belz = _FUZZED_BEL_Z.get(cellname, FUZZED_Z_BASE + len(tt.bels))
                 bel = tt.create_bel(cellname, cellname, z = belz)
                 for pin, pdir in _FUZZED_CELL_PORTS.get(cellname, []):
