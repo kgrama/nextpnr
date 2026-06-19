@@ -93,6 +93,30 @@ void GowinPacker::trim_nextpnr_iobs(void)
             CellTypePort(id_OBUF, id_O),
             CellTypePort(id_TBUF, id_O),
             CellTypePort(id_IOBUF, id_IO),
+            // Differential IO buffers that synthesis (e.g. gw_sh GowinSynthesis) may have
+            // already inserted on top-level diff ports.  These survive the trim and are
+            // consumed later by pack_diff_iobs(); without them, a top port driven by an
+            // ELVDS/TLVDS buffer is wrongly rejected as "illegal port".
+            // diff buffers drive BOTH the P pad (.O / .IO) and the N pad (.OB / .IOB) as
+            // separate top-level ports, so accept both complement ports.
+            CellTypePort(id_ELVDS_OBUF, id_O),
+            CellTypePort(id_ELVDS_OBUF, id_OB),
+            CellTypePort(id_TLVDS_OBUF, id_O),
+            CellTypePort(id_TLVDS_OBUF, id_OB),
+            CellTypePort(id_ELVDS_TBUF, id_O),
+            CellTypePort(id_ELVDS_TBUF, id_OB),
+            CellTypePort(id_TLVDS_TBUF, id_O),
+            CellTypePort(id_TLVDS_TBUF, id_OB),
+            CellTypePort(id_ELVDS_IBUF, id_I),
+            CellTypePort(id_ELVDS_IBUF, id_IB),
+            CellTypePort(id_TLVDS_IBUF, id_I),
+            CellTypePort(id_TLVDS_IBUF, id_IB),
+            CellTypePort(id_TLVDS_IBUF_ADC, id_I),
+            CellTypePort(id_TLVDS_IBUF_ADC, id_IB),
+            CellTypePort(id_ELVDS_IOBUF, id_IO),
+            CellTypePort(id_ELVDS_IOBUF, id_IOB),
+            CellTypePort(id_TLVDS_IOBUF, id_IO),
+            CellTypePort(id_TLVDS_IOBUF, id_IOB),
     };
     std::vector<IdString> to_remove;
     for (auto &cell : ctx->cells) {
