@@ -64,6 +64,7 @@ BSRAM_Z = 100
 OSC_Z   = 274
 PLL_Z   = 275
 GSR_Z   = 276
+GTR_Z   = 660  # GW5AST-138C GTR12_QUAD transceiver
 VCC_Z   = 277
 GND_Z   = 278
 BANDGAP_Z = 279
@@ -943,6 +944,20 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                     if not tt.has_wire(wire):
                         tt.create_wire(wire, "PLL_I")
                     tt.add_bel_pin(pll, pin, wire, PinType.INPUT)
+        elif func == 'gtr':
+                # GW5AST-138C GTR12_QUAD high-speed transceiver. Fabric port wires come from
+                # the .dat (chipdb fse_create_gtr); config is via CSR, not fuses. Pins are the
+                # INET_* interconnect bus bits.
+                gtr = tt.create_bel("GTR12_QUAD", "GTR12_QUAD", z = GTR_Z)
+                gtr.flags = BEL_FLAG_GLOBAL
+                for pin, wire in desc['outputs'].items():
+                    if not tt.has_wire(wire):
+                        tt.create_wire(wire, "IO_O")
+                    tt.add_bel_pin(gtr, pin, wire, PinType.OUTPUT)
+                for pin, wire in desc['inputs'].items():
+                    if not tt.has_wire(wire):
+                        tt.create_wire(wire, "IO_I")
+                    tt.add_bel_pin(gtr, pin, wire, PinType.INPUT)
         elif func == 'adc':
                 pll = tt.create_bel("ADC", "ADC", z = ADC_Z)
                 for pin, wire in desc['outputs'].items():

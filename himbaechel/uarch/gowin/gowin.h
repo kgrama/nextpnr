@@ -362,6 +362,8 @@ enum
     MULT12X12_1_Z = 641,
     MULTADDALU12X12_Z = 642,
     MULTALU27X18_Z = 643,
+
+    GTR_Z = 660, // GW5AST-138C GTR12_QUAD transceiver
 };
 }
 
