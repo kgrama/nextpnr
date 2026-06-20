@@ -95,6 +95,8 @@ struct GowinCstReader
                     std::regex("INS_LOC +\"([^\"]+)\" +R([0-9]+)C([0-9]+)\\[([0-9])\\]\\[([AB])\\] *;.*[\\s\\S]*");
             std::regex hclkre =
                     std::regex("INS_LOC +\"([^\"]+)\" +(TOP|RIGHT|BOTTOM|LEFT)SIDE\\[([0,1])\\] *;*[\\s\\S]*");
+            // GW5AST-138C PLL site placement: INS_LOC "inst" PLL_L[0] / PLL_R[0] / PLL_B[0..3]
+            std::regex pllre = std::regex("INS_LOC +\"([^\"]+)\" +PLL_([LRB])\\[([0-9])\\] *;*[\\s\\S]*");
             std::regex clockre = std::regex("CLOCK_LOC +\"([^\"]+)\" +BUF([GS])(\\[([0-7])\\])?[^;]*;.*[\\s\\S]*");
             std::regex adcre = std::regex("USE_ADC_SRC +bus([0-9]) +IO([TRBL])([0-9]+) *;.*[\\s\\S]*");
             std::smatch match, match_attr, match_pinloc;
@@ -107,6 +109,7 @@ struct GowinCstReader
                 insloc,
                 clock,
                 hclk,
+                pll,
                 adc
             } cst_type;
 
@@ -130,6 +133,8 @@ struct GowinCstReader
                             } else {
                                 if (std::regex_match(line, match, hclkre)) {
                                     cst_type = hclk;
+                                } else if (std::regex_match(line, match, pllre)) {
+                                    cst_type = pll;
                                 } else {
                                     if (std::regex_match(line, match, adcre)) {
                                         cst_type = adc;
@@ -268,6 +273,31 @@ struct GowinCstReader
                         log_error("No Bel of type CLKDIV found at constrained location %sSIDE[%s]\n",
                                   match[2].str().c_str(), match[3].str().c_str());
                     }
+                } break;
+                case pll: { // INS_LOC "inst" PLL_[LRB][idx]  (GW5AST-138C PLL sites)
+                    std::string side = match[2].str();
+                    int idx = std::stoi(match[3]);
+                    // Head-tile (col,row) per modeled PLL site, matching chipdb
+                    // fse_create_bottom_plls / fse_create_lr_plls.
+                    int x = -1, y = -1;
+                    if (side == "B") {
+                        static const int bcols[4] = {28, 32, 146, 150};
+                        if (idx >= 0 && idx < 4) { x = bcols[idx]; y = 108; }
+                    } else if (side == "L") {
+                        if (idx == 0) { x = 1; y = 27; }
+                    } else if (side == "R") {
+                        if (idx == 0) { x = 177; y = 27; }
+                    }
+                    if (x < 0) {
+                        log_error("Unsupported PLL site PLL_%s[%d] (modeled: PLL_B[0..3], PLL_L[0], PLL_R[0])\n",
+                                  side.c_str(), idx);
+                    }
+                    BelId bel = ctx->getBelByLocation(Loc(x, y, BelZ::PLL_Z));
+                    if (bel == BelId()) {
+                        log_error("No PLL Bel at site PLL_%s[%d] (X%dY%d)\n", side.c_str(), idx, x, y);
+                    }
+                    it->second->setAttr(IdString(ID_BEL), ctx->getBelName(bel).str(ctx));
+                    debug_cell(it->second->name, ctx->getBelName(bel));
                 } break;
                 default: { // IO_PORT attr=value
                     std::string attr_val = match[2];

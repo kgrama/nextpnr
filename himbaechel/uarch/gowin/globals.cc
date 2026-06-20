@@ -278,8 +278,17 @@ struct GowinGlobalRouter
                       ctx->nameOf(net->driver.port));
         }
 
-        if (aux_src == WireId() && ctx->getBoundWireNet(src) != net) {
-            ctx->bindWire(src, net, STRENGTH_LOCKED);
+        if (aux_src == WireId()) {
+            NetInfo *bound = ctx->getBoundWireNet(src);
+            if (bound != nullptr && bound != net) {
+                // Source wire already taken by another global net (e.g. two PLLs whose
+                // CLKOUTs share one spine entry). This net can't use global routing from
+                // here; fail gracefully so the caller can fall back instead of asserting.
+                return NOT_ROUTED;
+            }
+            if (bound == nullptr) {
+                ctx->bindWire(src, net, STRENGTH_LOCKED);
+            }
         }
 
         RouteResult routed = NOT_ROUTED;
