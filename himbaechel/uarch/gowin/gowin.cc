@@ -946,7 +946,20 @@ void GowinImpl::postRoute()
                         }
                         user.cell->setAttr(id_IOLOGIC_FCLK, Property("UNKNOWN"));
                         visited_hclk_users.insert(user.cell->name);
-                        PipId up_pip = h_net->wires.at(ctx->getNetinfoSinkWire(h_net, user, 0)).pip;
+                        // With --timing-allow-fail the router can leave an arc unrouted (logged as
+                        // "Failed to find a route for arc N of net ...") and continue; h_net->wires
+                        // then has no entry for this sink, so the unconditional .at() below threw
+                        // std::out_of_range and aborted post-route entirely instead of just leaving
+                        // this one IOLOGIC_FCLK attr at "UNKNOWN" (already set above) the way the
+                        // PLL CLKIN case just below already guards for the same situation.
+                        WireId sink_wire = ctx->getNetinfoSinkWire(h_net, user, 0);
+                        if (h_net->wires.count(sink_wire) == 0) {
+                            log_warning("FCLK net '%s' has no routed pip into sink '%s' (unrouted "
+                                        "arc) -- leaving IOLOGIC_FCLK unset for %s\n", ctx->nameOf(h_net),
+                                        ctx->nameOfWire(sink_wire), ctx->nameOf(user.cell));
+                            continue;
+                        }
+                        PipId up_pip = h_net->wires.at(sink_wire).pip;
                         IdString up_wire_name = ctx->getWireName(ctx->getPipSrcWire(up_pip))[1];
                         if (!gwu.has_5A_HCLK()) {
                             if (up_wire_name.in(id_HCLK_OUT0, id_HCLK_OUT1, id_HCLK_OUT2, id_HCLK_OUT3)) {
