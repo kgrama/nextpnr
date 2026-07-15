@@ -674,6 +674,46 @@ void GowinPacker::pack_iodelay(void)
     }
 }
 
+// GW5A DQS: unlike IODELAY, this cell is NOT merged into an IOLOGIC macro and erased — the
+// 'fuzzed' arch-gen path (gowin_arch_gen.py) creates DQS as its own standalone bel with fresh
+// local wires for every prim port, so the cell survives placement intact. Full DQS routing
+// (DQSR90/DQSW0/... into the DDR byte-lane IOLOGIC, and the DQS_MODE/HWL/FIFO_MODE_SEL fuses
+// in fuzzed_attrs) is unfuzzed follow-up work; this pass only keeps Context::check happy for
+// the control pins the open GW5DDRPHY ties to constants instead of driving dynamically:
+// WSTEP[7:0]=Constant(0,8) (dynamic write-tap path unused, same as IODELAY's DLYSTEP) and
+// RLOADN/RMOVE/RDIR/WLOADN/WMOVE/WDIR=constant (PHY always asserts the LOADN/DIR static mode,
+// never pulses MOVE) -- these have no fuzzed bel-pin routing yet, so a tied driver would
+// otherwise leave a "user port ... missing"-shaped dangling connection once routing is attempted.
+// HOLD/READ/RCLKSEL/DLLSTEP/DQSIN and the RVALID/RBURST/RFLAG/WFLAG/RPOINT/WPOINT/DQSR90/
+// DQSW0/DQSW270 outputs are genuinely dynamic in the PHY and are left connected.
+void GowinPacker::pack_dqs(void)
+{
+    log_info("Pack DQS...\n");
+    static const std::array<IdString, 7> tied_ports = {id_WSTEP, id_RLOADN, id_RMOVE,
+                                                         id_RDIR,  id_WLOADN, id_WMOVE, id_WDIR};
+    for (auto &cell : ctx->cells) {
+        CellInfo &ci = *cell.second;
+        if (ci.type != id_DQS) {
+            continue;
+        }
+        std::vector<IdString> to_drop;
+        for (auto &port : ci.ports) {
+            std::string pname = port.first.str(ctx);
+            for (IdString base : tied_ports) {
+                std::string bname = base.str(ctx);
+                // exact match (1-bit ports) or "BASE[" prefix match (multi-bit ports, e.g. WSTEP[7:0])
+                if (pname == bname || (pname.compare(0, bname.size(), bname) == 0 && pname[bname.size()] == '[')) {
+                    to_drop.push_back(port.first);
+                    break;
+                }
+            }
+        }
+        for (auto p : to_drop) {
+            ci.disconnectPort(p);
+        }
+    }
+}
+
 void GowinPacker::pack_iologic(void)
 {
     log_info("Pack IO logic...\n");

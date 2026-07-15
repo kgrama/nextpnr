@@ -451,6 +451,31 @@ void GowinPacker::pack_dhcens(void)
 }
 
 // =========================================
+// Pack user-instantiated DHCE (GW5A)
+// =========================================
+// GW5A yosys prim DHCE(CLKIN,CEN,CLKOUT) is a DIFFERENT primitive from the DHCEN handled by
+// pack_dhcens() above: DHCEN there is nextpnr's own internal auto-inserted global-clock-network
+// gate (never a user cell type); DHCE is what user RTL instantiates directly (LiteX CRGs gate
+// cd_sys2x off the DDR3 PHY's init-pause signal with it). See chipdb.py _GW5AST_FUZZED_CELLS
+// ['DHCE'] for the placement-anchor scope decision (unfuzzed CE-wire trace -> pass-through model).
+// CEN has no fuse/routing behind it in that model, so — exactly like pack_iodelay's tied-off
+// DLYSTEP[7:0] — it must be dropped before Context::check runs, or it dangles as a user of
+// whatever net drives it with no matching bel pin to route into.
+void GowinPacker::pack_dhce(void)
+{
+    log_info("Pack DHCE...\n");
+    for (auto &cell : ctx->cells) {
+        CellInfo &ci = *cell.second;
+        if (ci.type != id_DHCE) {
+            continue;
+        }
+        if (ci.ports.count(id_CEN)) {
+            ci.disconnectPort(id_CEN);
+        }
+    }
+}
+
+// =========================================
 // Enable UserFlash
 // =========================================
 void GowinPacker::pack_userflash(bool have_emcu)
@@ -589,6 +614,12 @@ void GowinPacker::run(void)
     ctx->check();
 
     pack_iodelay();
+    ctx->check();
+
+    pack_dqs();
+    ctx->check();
+
+    pack_dhce();
     ctx->check();
 
     pack_iem();

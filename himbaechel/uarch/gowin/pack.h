@@ -26,6 +26,8 @@ struct GowinPacker
     void pack_diff_iobs(void);
     void pack_io_regs(void);
     void pack_iodelay(void);
+    void pack_dqs(void);
+    void pack_dhce(void);
     void pack_iologic(void);
 
     // 16 SERDES

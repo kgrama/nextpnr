@@ -79,12 +79,25 @@ USERFLASH_Z = 298
 FUZZED_Z_BASE = 400
 _FUZZED_BEL_Z = {
     'DQS': 400, 'DDRDLL': 401, 'IODELAY': 402, 'PLL': 403, 'SDPB': 404, 'DSP': 405,
+    'DHCE': 406,
 }
 # Port lists (name, 'i'/'o') from the GW5A vendor prim_sim — the cells we fuzzed.
 _FUZZED_CELL_PORTS = {
-    'DQS': [('DQSIN','i'),('PCLK','i'),('FCLK','i'),('RESET','i'),('READ','i'),
-            ('RCLKSEL','i'),('DLLSTEP','i'),('WSTEP','i'),
-            ('DQSR90','o'),('DQSW0','o'),('DQSW270','o'),('RVALID','o'),('RFLAG','o'),('WFLAG','o')],
+    # DQS(DQSIN,PCLK,FCLK,RESET,READ[3:0],RCLKSEL[2:0],DLLSTEP[7:0],WSTEP[7:0],RLOADN,RMOVE,RDIR,
+    #     WLOADN,WMOVE,WDIR,HOLD, DQSR90,DQSW0,DQSW270,RPOINT[2:0],WPOINT[2:0],RVALID,RBURST,RFLAG,
+    #     WFLAG) per yosys cells_xtra_gw5a.v:2512. Widths/missing ports per the 3-way audit:
+    #   READ/RCLKSEL/DLLSTEP were 1-bit or absent -> widened to match (PHY drives Replicate(dqs_re,4),
+    #   rdly[2:0], init.delay[7:0]).  RPOINT/WPOINT (o) and HOLD/RBURST/RLOADN/RMOVE/RDIR/WLOADN/
+    #   WMOVE/WDIR were entirely absent -> added.  WSTEP is a bel-pin bus like DLLSTEP even though the
+    #   open GW5DDRPHY ties it to Constant(0,8) — pack_iodelay's DLYSTEP precedent drops tied-off pins
+    #   at the PACKER stage, not the arch-gen stage, so it stays modelled here for any future consumer
+    #   that drives it dynamically.
+    'DQS': [('DQSIN','i'),('PCLK','i'),('FCLK','i'),('RESET','i'),('READ','i',4),
+            ('RCLKSEL','i',3),('DLLSTEP','i',8),('WSTEP','i',8),
+            ('RLOADN','i'),('RMOVE','i'),('RDIR','i'),('WLOADN','i'),('WMOVE','i'),('WDIR','i'),('HOLD','i'),
+            ('DQSR90','o'),('DQSW0','o'),('DQSW270','o'),
+            ('RPOINT','o',3),('WPOINT','o',3),
+            ('RVALID','o'),('RBURST','o'),('RFLAG','o'),('WFLAG','o')],
     'DDRDLL': [('CLKIN','i'),('STOP','i'),('RESET','i'),('UPDNCNTL','i'),('STEP','o'),('LOCK','o')],
     # DLYSTEP is an 8-bit bus on the GW5A IODELAY prim (yosys cells_xtra_gw5a: input [7:0] DLYSTEP);
     # a 3rd tuple element gives the pin width so it expands to DLYSTEP[0..7] (LiteX GW5DDRPHY ties
@@ -100,6 +113,11 @@ _FUZZED_CELL_PORTS = {
     'SDPB': [('CLKA','i'),('CLKB','i'),('RESET','i'),('CEA','i'),('CEB','i'),('OCE','i'),
              ('ADA','i'),('ADB','i'),('DI','i'),('DO','o')],
     'DSP': [('A','i'),('B','i'),('D','i'),('CLK','i'),('CE','i'),('RESET','i'),('DOUT','o')],
+    # DHCE(CLKIN,CEN,CLKOUT) per yosys cells_xtra_gw5a.v:1196 — NOT the internal DHCEN mechanism
+    # (see chipdb.py _GW5AST_FUZZED_CELLS['DHCE'] comment). CEN has no fuzzed CE-wire/fuse behind
+    # it on this device; pack_dhce (pack.cc) drops it before placement so the always-unmodelled
+    # gate doesn't dangle a "user port missing" connection, same shape as IODELAY's DLYSTEP.
+    'DHCE': [('CLKIN','i'),('CEN','i'),('CLKOUT','o')],
 }
 
 EMCU_Z      = 300
@@ -820,12 +838,22 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                     tt.create_wire(wire)
                 tt.add_bel_pin(bel, "SELFORCE", wire, PinType.INPUT)
         elif func == 'fuzzed':
-            # Fuzzed GW5AST-138C hard cells (DQS/DDRDLL/IODELAY/DCS/SDPB/DSP/PLL/...).
+            # Fuzzed GW5AST-138C hard cells (DQS/DDRDLL/IODELAY/DCS/SDPB/DSP/PLL/DHCE/...).
             # Bel locations from fuzzing (apicula fse_create_gw5ast_fuzzed_cells); create a
             # REAL bel (not a blackbox) at each, with its ports from the GW5A prim list as
             # fresh local wires.  This makes the cell PLACEABLE by nextpnr.  Routing pips to
             # these wires are added separately (the differential fuzz gives the bel+fuses;
             # full wire connectivity is a follow-up fuzz).
+            #
+            # SCOPE DECISION (primitive-model audit, GW5AST-138C DQS/DHCE fixes): chipdb.py's
+            # 'fuzzed_attrs' (DQS_MODE/HWL/FIFO_MODE_SEL/C_STATIC_DLY/... param->fuse maps) is
+            # WRITTEN by fse_create_gw5ast_fuzzed_cells but this arch-gen path -- and gowin_pack.py,
+            # the actual fuse emitter -- NEVER READS it (grep 'fuzzed' in gowin_pack.py: only PLL
+            # comments). So fixing DQS's bel pins here gets the open DDR3 PHY through place-and-
+            # route, but the emitted bitstream will NOT carry DQS_MODE=X2_DDR3 / HWL / the static
+            # IODELAY tap, etc. -- those fuses are silently absent, not silently wrong. Wiring
+            # gowin_pack to consume fuzzed_attrs is explicitly OUT OF SCOPE for this change (a
+            # placement/model-mismatch fix, not a fuse-emission fix) and is a FOLLOW-UP.
             for cellname, info in desc.items():
                 # PLL is handled by the routed 'bpll' bel (z=PLL_Z, with clock routing);
                 # do NOT create duplicate unrouted PLL bels here (the placer would pick an
