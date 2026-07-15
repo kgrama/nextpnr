@@ -1076,6 +1076,27 @@ bool GowinImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
             return true;
         }
         return hclk_valid(bel, bel_type);
+    case ID_PLL: {
+        // GW5AST-138C PLL sites SHARE clock-spine entry groups (all bottom-left head tiles tie
+        // CLKOUT0..3 into the one BLPLL0CLK<n> node; L/R sites pair into TLPLL{0,1}/TRPLL{0,1}
+        // groups -- apicula fse_create_bottom_plls/fse_create_lr_plls). Two placed PLLs in the
+        // same group alias the same spine wires and routing dies with "Found two nets with same
+        // source wire". Reject such placements so the placer moves to a different spine group.
+        WireId my_out = ctx->getBelPinWire(bel, id_CLKOUT0);
+        if (my_out == WireId()) {
+            return true;
+        }
+        for (auto &cell : ctx->cells) {
+            const CellInfo *ci = cell.second.get();
+            if (ci->type != id_PLL || ci->bel == BelId() || ci->bel == bel) {
+                continue;
+            }
+            if (ctx->getBelType(ci->bel) == id_PLL && ctx->getBelPinWire(ci->bel, id_CLKOUT0) == my_out) {
+                return false;
+            }
+        }
+        return true;
+    }
     }
     return true;
 }

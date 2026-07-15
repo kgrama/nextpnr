@@ -135,6 +135,67 @@ void GowinPacker::pack_inv(void)
 {
     log_info("Pack INV...\n");
 
+    // Absorb clock inverters first: an INV whose output drives ONLY the CLK pins of DFFs
+    // becomes an edge flip of those DFFs (DFF<->DFFN etc.), exactly what gw_sh does. Left as a
+    // LUT, an inverted clock becomes clock-as-LUT-data, and a clock-network-sourced net (e.g. a
+    // CLKDIV output on the GW5A HCLK network -- the USB soft-PHY's inverted 60MHz sclk) has no
+    // path into fabric LUT inputs at all, failing routing on that one arc.
+    static const std::vector<std::pair<IdString, IdString>> ff_pairs = {
+            {id_DFF, id_DFFN},   {id_DFFE, id_DFFNE},   {id_DFFS, id_DFFNS}, {id_DFFSE, id_DFFNSE},
+            {id_DFFR, id_DFFNR}, {id_DFFRE, id_DFFNRE}, {id_DFFP, id_DFFNP}, {id_DFFPE, id_DFFNPE},
+            {id_DFFC, id_DFFNC}, {id_DFFCE, id_DFFNCE}};
+    dict<IdString, IdString> ff_flip;
+    for (auto &p : ff_pairs) {
+        ff_flip[p.first] = p.second;
+        ff_flip[p.second] = p.first;
+    }
+    std::vector<IdString> cells_to_remove;
+    std::vector<IdString> nets_to_remove;
+    for (auto &cell : ctx->cells) {
+        auto &ci = *cell.second;
+        if (ci.type != id_INV) {
+            continue;
+        }
+        NetInfo *out = ci.getPort(id_O);
+        NetInfo *in = ci.getPort(id_I);
+        if (out == nullptr || in == nullptr || out->users.empty()) {
+            continue;
+        }
+        bool all_dff_clk = true;
+        for (auto &usr : out->users) {
+            if (usr.port != id_CLK || ff_flip.count(usr.cell->type) == 0) {
+                all_dff_clk = false;
+                break;
+            }
+        }
+        if (!all_dff_clk) {
+            continue;
+        }
+        std::vector<PortRef> users;
+        for (auto &usr : out->users) {
+            users.push_back(usr);
+        }
+        for (auto &usr : users) {
+            usr.cell->type = ff_flip.at(usr.cell->type);
+            usr.cell->disconnectPort(id_CLK);
+            usr.cell->connectPort(id_CLK, in);
+        }
+        ci.disconnectPort(id_O);
+        ci.disconnectPort(id_I);
+        log_info("    absorb clock INV %s: flip %d DFF(s) to opposite edge on '%s'\n", ctx->nameOf(&ci),
+                 (int)users.size(), in->name.c_str(ctx));
+        nets_to_remove.push_back(out->name);
+        cells_to_remove.push_back(ci.name);
+    }
+    for (auto cell : cells_to_remove) {
+        ctx->cells.erase(cell);
+    }
+    for (auto net : nets_to_remove) {
+        if (ctx->nets.count(net) && ctx->nets.at(net)->users.empty() && ctx->nets.at(net)->driver.cell == nullptr) {
+            ctx->nets.erase(net);
+        }
+    }
+
     for (auto &cell : ctx->cells) {
         auto &ci = *cell.second;
 
@@ -458,12 +519,22 @@ void GowinPacker::pack_dhcens(void)
 // gate (never a user cell type); DHCE is what user RTL instantiates directly (LiteX CRGs gate
 // cd_sys2x off the DDR3 PHY's init-pause signal with it). See chipdb.py _GW5AST_FUZZED_CELLS
 // ['DHCE'] for the placement-anchor scope decision (unfuzzed CE-wire trace -> pass-through model).
-// CEN has no fuse/routing behind it in that model, so — exactly like pack_iodelay's tied-off
-// DLYSTEP[7:0] — it must be dropped before Context::check runs, or it dangles as a user of
-// whatever net drives it with no matching bel pin to route into.
+//
+// The cell is DISSOLVED here, not placed: keeping it as a bel (the old approach) anchored the
+// CLKOUT net at the synthetic (108,165) fuzzed bel, a fabric wire island with no path onto the
+// global clock network -- so a DHCE-gated clock fanning out to IOLOGIC FCLK pins could never
+// reach the HCLK entry muxes (per-region L2HCLK wires fed from GB taps at the 6 HCLK control
+// tiles; the whole chain is modelled in apicula's gw5_make_hclk_pips and verified against the
+// gw_sh-routed openddr_ddr3only.fs, which routes this exact net as a plain global entering
+// regions 0 and 1 independently -- no bridge tiles involved). Since pack_dhce already dropped
+// CEN (no fuzzed CE-wire/fuse), the placed bel added no gating anyway; rewiring CLKOUT's users
+// onto the CLKIN net is semantically identical and lets the source (typically a PLL CLKOUT)
+// drive the sinks as a real global.
 void GowinPacker::pack_dhce(void)
 {
     log_info("Pack DHCE...\n");
+    std::vector<IdString> cells_to_remove;
+    std::vector<IdString> nets_to_remove;
     for (auto &cell : ctx->cells) {
         CellInfo &ci = *cell.second;
         if (ci.type != id_DHCE) {
@@ -471,6 +542,36 @@ void GowinPacker::pack_dhce(void)
         }
         if (ci.ports.count(id_CEN)) {
             ci.disconnectPort(id_CEN);
+        }
+        NetInfo *net_in = ci.getPort(id_CLKIN);
+        NetInfo *net_out = ci.getPort(id_CLKOUT);
+        if (net_out != nullptr) {
+            std::vector<PortRef> users;
+            for (auto &usr : net_out->users) {
+                users.push_back(usr);
+            }
+            for (auto &usr : users) {
+                usr.cell->disconnectPort(usr.port);
+                if (net_in != nullptr) {
+                    usr.cell->connectPort(usr.port, net_in);
+                }
+            }
+            ci.disconnectPort(id_CLKOUT);
+            nets_to_remove.push_back(net_out->name);
+        }
+        if (net_in != nullptr) {
+            ci.disconnectPort(id_CLKIN);
+        }
+        log_info("    dissolve %s: '%s' users moved to '%s'\n", ctx->nameOf(&ci),
+                 net_out ? net_out->name.c_str(ctx) : "-", net_in ? net_in->name.c_str(ctx) : "-");
+        cells_to_remove.push_back(ci.name);
+    }
+    for (auto cell : cells_to_remove) {
+        ctx->cells.erase(cell);
+    }
+    for (auto net : nets_to_remove) {
+        if (ctx->nets.count(net) && ctx->nets.at(net)->users.empty() && ctx->nets.at(net)->driver.cell == nullptr) {
+            ctx->nets.erase(net);
         }
     }
 }
