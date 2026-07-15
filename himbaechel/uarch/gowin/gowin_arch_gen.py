@@ -877,15 +877,56 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                     continue
                 belz = _FUZZED_BEL_Z.get(cellname, FUZZED_Z_BASE + len(tt.bels))
                 bel = tt.create_bel(cellname, cellname, z = belz)
+                # DQS's PCLK/FCLK are dedicated-clock inputs that MUST land on the tile's real
+                # global-clock-capable wires (CLK0/CLK1), not a fresh island wire: the openddr
+                # silicon bitstream shows the DQS io_tile's CLK0 fed from GB00 (fuzzed, real
+                # fuses in db[y,x].pips), the same GT/GBO/GB global-entry chain the DHCE-gated
+                # IOLOGIC FCLK fix (pack_dhce) relies on. Pre-fix, PCLK/FCLK got fresh wires with
+                # zero pips in OR out -> "Failed to find a route" for both dedicated-clock arcs
+                # (crg_clkout0/1 -> DQS_PCLK/DQS_FCLK). Only these two ports get the real-wire
+                # treatment; every other DQS port (HOLD, RESET, READ, ...) already routes fine
+                # through ordinary general fabric routing on a fresh wire.
+                # HOLD is an ordinary (non-clock) input that just needs SOME general-routable
+                # fabric wire to land on -- LSR0 is fuzzed with a full general-routing pip table
+                # at every DQS io_tile (20 srcs incl. X05-X08/N271/S271/...), unlike the fresh
+                # island wire which has none. Every remaining DQS input (DQSIN/RESET/READ[4]/
+                # RCLKSEL[3]/DLLSTEP[8]/WSTEP[8]/R|WLOADN/R|WMOVE/R|WDIR = 31 pins) gets one of
+                # the D/B/A/C-bank fabric input wires (D0-7,B0-7,A0-7,C0-7 = 32 wires), each
+                # fuzzed with a full 28-entry general-routing pip table at the DQS io_tile --
+                # confirmed against the openddr silicon capture, where these exact wire names
+                # carry the DDR3 PHY's non-clock DQS inputs (e.g. D3-D7/B2/B4-B7/C0-C7/A0-A7 all
+                # showed real routed net values). A round-robin assignment is fine: unlike
+                # PCLK/FCLK (dedicated-clock-only) or a bel-specific control input with a real
+                # documented location, these are plain data/control bits -- any general wire
+                # that reaches the bel works, so there is no "correct" one to discover by fuzzing
+                # further, only "a working one".
+                _dqs_fabric_pins = [f'{b}{i}' for b in 'DBAC' for i in range(8)]
+                _dqs_clk_pin_wire = {'PCLK': 'CLK0', 'FCLK': 'CLK1', 'HOLD': 'LSR0'}
+                _dqs_fabric_idx = [0]
                 for pinspec in _FUZZED_CELL_PORTS.get(cellname, []):
                     pin, pdir = pinspec[0], pinspec[1]
                     width = pinspec[2] if len(pinspec) > 2 else 1
                     # Multi-bit pins expand to indexed bel pins pin[0..width-1]; 1-bit stay bare.
                     pin_names = [pin] if width == 1 else [f'{pin}[{b}]' for b in range(width)]
+                    is_dqs_input = cellname == 'DQS' and pdir == 'i'
                     for pn in pin_names:
-                        wname = f'{cellname}_{pn}_X{x}Y{y}'
-                        if not tt.has_wire(wname):
-                            tt.create_wire(wname)
+                        real_wire = _dqs_clk_pin_wire.get(pn) if cellname == 'DQS' else None
+                        if real_wire is None and is_dqs_input and pin not in _dqs_clk_pin_wire:
+                            real_wire = _dqs_fabric_pins[_dqs_fabric_idx[0]]
+                            _dqs_fabric_idx[0] += 1
+                        if real_wire is not None:
+                            # create_extra_funcs() runs BEFORE create_switch_matrix() (which is
+                            # what normally instantiates CLK0/CLK1 from db[y,x].pips), so the
+                            # wire may not exist yet here -- create it eagerly. Both call sites
+                            # guard with has_wire(), so whichever runs first wins harmlessly and
+                            # the later one just adds pips into the same wire.
+                            wname = real_wire
+                            if not tt.has_wire(wname):
+                                tt.create_wire(wname, "TILE_CLK")
+                        else:
+                            wname = f'{cellname}_{pn}_X{x}Y{y}'
+                            if not tt.has_wire(wname):
+                                tt.create_wire(wname)
                         tt.add_bel_pin(bel, pn, wname,
                                        PinType.OUTPUT if pdir == 'o' else PinType.INPUT)
         elif func == 'io16':

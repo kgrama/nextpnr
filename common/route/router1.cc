@@ -1210,8 +1210,9 @@ bool router1(Context *ctx, const Router1Cfg &cfg)
             arc_key arc = router.arc_queue_pop();
             if (arc.net_info->constant_value != IdString()) {
                 if (!router.route_const_arc(arc, true)) {
-                    log_warning("Failed to find a route for arc %d of net %s.\n", arc.user_idx.idx(),
-                                ctx->nameOf(arc.net_info));
+                    auto &usr = arc.net_info->users.at(arc.user_idx);
+                    log_warning("Failed to find a route for arc %d of net %s (sink %s.%s).\n", arc.user_idx.idx(),
+                                ctx->nameOf(arc.net_info), ctx->nameOf(usr.cell), usr.port.c_str(ctx));
 #ifndef NDEBUG
                     router.check();
                     ctx->check();
