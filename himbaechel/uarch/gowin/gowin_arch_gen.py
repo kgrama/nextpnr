@@ -861,6 +861,16 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                 # per-site clock-routing fuzz before those bels are usable; skip for now.
                 if cellname == 'PLL':
                     continue
+                # OSER4_MEM/IDES4_MEM/OSER8_MEM/IDES8_MEM are handled by the GENERAL IOLOGIC
+                # packer (pack_bi_output_iol/pack_ides_iol via get_iologico_bel/get_iologici_bel
+                # -> real IOLOGICA/B bels with real clock-tree routing pips), not this synthetic
+                # fresh-wire path -- none of the four have a _FUZZED_CELL_PORTS entry, so without
+                # this skip they'd ALSO get a same-named zero-pin bel here with no pips into any
+                # of its ports.  The placer picked that phantom bel over the real IOLOGIC one for
+                # OSER4_MEM ("invalid sink port OSER4_MEM.PCLK" -- a bel with no PCLK pip at all,
+                # not a routing-coverage gap), so this is a hard skip, not just dead weight.
+                if cellname in ('OSER4_MEM', 'IDES4_MEM', 'OSER8_MEM', 'IDES8_MEM'):
+                    continue
                 belz = _FUZZED_BEL_Z.get(cellname, FUZZED_Z_BASE + len(tt.bels))
                 bel = tt.create_bel(cellname, cellname, z = belz)
                 for pinspec in _FUZZED_CELL_PORTS.get(cellname, []):

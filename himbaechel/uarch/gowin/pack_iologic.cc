@@ -137,6 +137,13 @@ void GowinPacker::pack_bi_output_iol(CellInfo &ci, std::vector<IdString> &nets_t
     case ID_OSER8:
         out_mode = "ODDRX4";
         break;
+    case ID_OSER4_MEM:
+        // GW5A prim: OSER4_MEM(D0..D3,TX0,TX1,PCLK,FCLK,TCLK,RESET,Q0,Q1) -- same TX0/TX1 width
+        // as OSER4 (not OSER8's TX0..TX3) but with OSER8_MEM's TCLK port. See pack_ides_iol's
+        // IDES4_MEM case (same fix, same reason: unhandled by nextpnr despite real chipdb data).
+        out_mode = "MODDRX2";
+        ci.disconnectPort(id_TCLK);
+        break;
     case ID_OSER8_MEM:
         out_mode = "MODDRX4";
         ci.disconnectPort(id_TCLK);
@@ -167,6 +174,7 @@ void GowinPacker::pack_bi_output_iol(CellInfo &ci, std::vector<IdString> &nets_t
             ci.disconnectPort(id_TX3);
             ci.disconnectPort(id_TX2); /* fall-through */
         case ID_OSER4:
+        case ID_OSER4_MEM:
             ci.disconnectPort(id_TX1);
             ci.disconnectPort(id_TX0);
             break;
@@ -361,8 +369,17 @@ void GowinPacker::pack_ides_iol(CellInfo &ci, std::vector<IdString> &nets_to_rem
     case ID_IDES8:
         in_mode = "IDDRX4";
         break;
+    case ID_IDES4_MEM:
+        // GW5A prim: IDES4_MEM(PCLK,D,ICLK,FCLK,RESET,CALIB,WADDR[2:0],RADDR[2:0],Q0..Q3) --
+        // identical shape to IDES8_MEM (below), just 4-wide instead of 8. Was entirely
+        // unhandled by nextpnr (no case here, no bel-port table in gowin_arch_gen.py's
+        // _FUZZED_CELL_PORTS) despite apicula's chipdb having real fuzzed site data for it
+        // (the open GW5DDRPHY OSER4/IDES4_MEM DDR3 PHY) -> "invalid sink port ...PCLK" the
+        // moment a real design (not just a placement-only smoke test) drove its clock pins.
+        // MIDDRX2 confirmed as a real OUTMODE/INMODE value apicula's own gowin_pack.py fuse
+        // encoder already recognizes ({'MIDDRX1','MIDDRX2','MIDDRX4'} for IDES*_MEM).
     case ID_IDES8_MEM:
-        in_mode = "MIDDRX4";
+        in_mode = (ci.type == id_IDES4_MEM) ? "MIDDRX2" : "MIDDRX4";
         for (int i = 0; i < 3; ++i) {
             ci.disconnectPort(ctx->idf("WADDR[%d]", i));
             ci.disconnectPort(ctx->idf("RADDR[%d]", i));
@@ -727,7 +744,7 @@ void GowinPacker::pack_iologic(void)
         if (ctx->debug) {
             log_info("pack %s of type %s.\n", ctx->nameOf(&ci), ci.type.c_str(ctx));
         }
-        if (ci.type.in(id_ODDR, id_ODDRC, id_OSER4, id_OSER8, id_OSER8_MEM)) {
+        if (ci.type.in(id_ODDR, id_ODDRC, id_OSER4, id_OSER4_MEM, id_OSER8, id_OSER8_MEM)) {
             pack_bi_output_iol(ci, nets_to_remove);
             create_aux_iologic_cell(ci, ctx->id("OUTMODE"));
             continue;
@@ -737,7 +754,7 @@ void GowinPacker::pack_iologic(void)
             create_aux_iologic_cell(ci, ctx->id("OUTMODE"));
             continue;
         }
-        if (ci.type.in(id_IDDR, id_IDDRC, id_IDES4, id_IDES8, id_IDES8_MEM, id_IDES10, id_IVIDEO, id_IOLOGICI_EMPTY)) {
+        if (ci.type.in(id_IDDR, id_IDDRC, id_IDES4, id_IDES4_MEM, id_IDES8, id_IDES8_MEM, id_IDES10, id_IVIDEO, id_IOLOGICI_EMPTY)) {
             pack_ides_iol(ci, nets_to_remove);
             create_aux_iologic_cell(ci, ctx->id("INMODE"));
             continue;
