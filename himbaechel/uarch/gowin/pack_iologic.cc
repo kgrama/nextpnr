@@ -635,6 +635,26 @@ void GowinPacker::pack_iodelay(void)
         ci.movePortTo(id_VALUE, iologic, id_VALUE);
         ci.movePortTo(id_DF, iologic, id_DF);
 
+        // GW5A: the prim is IODELAY(DI,SDTAP,VALUE,DLYSTEP[7:0],DF,DO) — there is NO SETN (that is
+        // the GW1N/GW2A-era port the movePortTo above targets, a no-op here), and DLYSTEP[7:0] has
+        // no counterpart on the IOLOGIC bel.  Nothing moves it, so when this cell is erased below
+        // its DLYSTEP pins stay listed as users of whatever drives them (typically $PACKER_GND) ->
+        // Context::check aborts with "net '$PACKER_GND' user port 'DLYSTEP[N]' missing on cell
+        // 'IODELAY'".  Dropping the connections is CORRECT, not a workaround: the dynamic-tap path
+        // is disabled unless DYN_DLY_EN="TRUE" (which instantiates separate HW, not a mode fuse),
+        // and the open LiteDRAM GW5DDRPHY hardwires DYN_DLY_EN="FALSE" + DLYSTEP=8'b0 — only the
+        // static C_STATIC_DLY tap (moved below) is ever used.
+        // Collect first, then disconnect: mutating ci.ports while iterating it is UB.
+        {
+            std::vector<IdString> dlysteps;
+            for (auto &port : ci.ports) {
+                if (port.first.str(ctx).compare(0, 7, "DLYSTEP") == 0)
+                    dlysteps.push_back(port.first);
+            }
+            for (auto p : dlysteps)
+                ci.disconnectPort(p);
+        }
+
         if (ci.params.count(id_C_STATIC_DLY)) {
             iologic->setParam(id_C_STATIC_DLY, ci.params.at(id_C_STATIC_DLY));
         }

@@ -86,7 +86,10 @@ _FUZZED_CELL_PORTS = {
             ('RCLKSEL','i'),('DLLSTEP','i'),('WSTEP','i'),
             ('DQSR90','o'),('DQSW0','o'),('DQSW270','o'),('RVALID','o'),('RFLAG','o'),('WFLAG','o')],
     'DDRDLL': [('CLKIN','i'),('STOP','i'),('RESET','i'),('UPDNCNTL','i'),('STEP','o'),('LOCK','o')],
-    'IODELAY': [('DI','i'),('SDTAP','i'),('VALUE','i'),('DLYSTEP','i'),('DO','o'),('DF','o')],
+    # DLYSTEP is an 8-bit bus on the GW5A IODELAY prim (yosys cells_xtra_gw5a: input [7:0] DLYSTEP);
+    # a 3rd tuple element gives the pin width so it expands to DLYSTEP[0..7] (LiteX GW5DDRPHY ties
+    # DLYSTEP[4] etc. -> "user port DLYSTEP[4] missing" if modeled as a single bit).
+    'IODELAY': [('DI','i'),('SDTAP','i'),('VALUE','i'),('DLYSTEP','i',8),('DO','o'),('DF','o')],
     # GW5A PLL: 7 outputs CLKOUT0..6 + LOCK; config inputs incl fractional/SSC + trim.
     'PLL': [('CLKIN','i'),('CLKFB','i'),('RESET','i'),('PLLPWD','i'),
             ('ICPSEL','i'),('LPFRES','i'),('LPFCAP','i'),
@@ -832,12 +835,17 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                     continue
                 belz = _FUZZED_BEL_Z.get(cellname, FUZZED_Z_BASE + len(tt.bels))
                 bel = tt.create_bel(cellname, cellname, z = belz)
-                for pin, pdir in _FUZZED_CELL_PORTS.get(cellname, []):
-                    wname = f'{cellname}_{pin}_X{x}Y{y}'
-                    if not tt.has_wire(wname):
-                        tt.create_wire(wname)
-                    tt.add_bel_pin(bel, pin, wname,
-                                   PinType.OUTPUT if pdir == 'o' else PinType.INPUT)
+                for pinspec in _FUZZED_CELL_PORTS.get(cellname, []):
+                    pin, pdir = pinspec[0], pinspec[1]
+                    width = pinspec[2] if len(pinspec) > 2 else 1
+                    # Multi-bit pins expand to indexed bel pins pin[0..width-1]; 1-bit stay bare.
+                    pin_names = [pin] if width == 1 else [f'{pin}[{b}]' for b in range(width)]
+                    for pn in pin_names:
+                        wname = f'{cellname}_{pn}_X{x}Y{y}'
+                        if not tt.has_wire(wname):
+                            tt.create_wire(wname)
+                        tt.add_bel_pin(bel, pn, wname,
+                                       PinType.OUTPUT if pdir == 'o' else PinType.INPUT)
         elif func == 'io16':
             role = desc['role']
             if role == 'MAIN':
