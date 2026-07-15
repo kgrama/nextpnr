@@ -98,7 +98,11 @@ _FUZZED_CELL_PORTS = {
             ('DQSR90','o'),('DQSW0','o'),('DQSW270','o'),
             ('RPOINT','o',3),('WPOINT','o',3),
             ('RVALID','o'),('RBURST','o'),('RFLAG','o'),('WFLAG','o')],
-    'DDRDLL': [('CLKIN','i'),('STOP','i'),('RESET','i'),('UPDNCNTL','i'),('STEP','o'),('LOCK','o')],
+    # STEP is an 8-bit bus on the GW5A DDRDLL prim (yosys cells_xtra_gw5a: output [7:0] STEP),
+    # same shape/same fix as IODELAY's DLYSTEP below -- was 1-bit here, causing "No wire found for
+    # port STEP[2] on source cell DDRDLL" the instant the open GW5DDRPHY (which reads STEP[7:0]
+    # for its init delay calibration) actually drove/read a bit past STEP[0].
+    'DDRDLL': [('CLKIN','i'),('STOP','i'),('RESET','i'),('UPDNCNTL','i'),('STEP','o',8),('LOCK','o')],
     # DLYSTEP is an 8-bit bus on the GW5A IODELAY prim (yosys cells_xtra_gw5a: input [7:0] DLYSTEP);
     # a 3rd tuple element gives the pin width so it expands to DLYSTEP[0..7] (LiteX GW5DDRPHY ties
     # DLYSTEP[4] etc. -> "user port DLYSTEP[4] missing" if modeled as a single bit).

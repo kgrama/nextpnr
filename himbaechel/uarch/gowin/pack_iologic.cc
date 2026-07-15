@@ -62,7 +62,12 @@ BelId GowinPacker::get_iologici_bel(CellInfo *iob)
 
 void GowinPacker::check_iologic_placement(CellInfo &ci, Loc iob_loc, int diff /* 1 - diff */)
 {
-    if (ci.type.in(id_ODDR, id_ODDRC, id_IDDR, id_IDDRC, id_OSER4, id_IOLOGICI_EMPTY, id_IOLOGICO_EMPTY) || diff) {
+    // OSER4_MEM shares OSER4's exemption: like OSER4 (ODDRX2, ci.type.in above), it does not tie
+    // up the complementary A/B IOB slot at this tile the way OSER8/OSER8_MEM/ODDR's wider gearing
+    // does. Missing this exemption made every OSER4_MEM instance wrongly demand its sibling IOB
+    // slot be free -- "Can't place OSER4_MEM_N at .../IOBA because it's already taken by..." even
+    // when OSER4_MEM_N's own real target IOB (a DIFFERENT tile) was perfectly free.
+    if (ci.type.in(id_ODDR, id_ODDRC, id_IDDR, id_IDDRC, id_OSER4, id_OSER4_MEM, id_IOLOGICI_EMPTY, id_IOLOGICO_EMPTY) || diff) {
         return;
     }
     BelId l_bel = ctx->getBelByLocation(Loc(iob_loc.x, iob_loc.y, BelZ::IOBA_Z + 1 - (iob_loc.z - BelZ::IOBA_Z)));
@@ -255,7 +260,13 @@ bool GowinPacker::is_mipi_io(BelId bel)
 
 CellInfo *GowinPacker::create_aux_iologic_cell(CellInfo &ci, IdString mode, bool io16, int idx)
 {
-    if (ci.type.in(id_ODDR, id_ODDRC, id_OSER4, id_IDDR, id_IDDRC, id_IDES4, id_IOLOGICI_EMPTY, id_IOLOGICO_EMPTY)) {
+    // OSER4_MEM/IDES4_MEM get the same exemption as their OSER4/IDES4 siblings: this pass creates
+    // a DUMMY aux cell on the paired A/B IOLOGIC slot for macros that consume it (OSER8/ODDR-class
+    // gearing); OSER4/OSER4_MEM/IDES4/IDES4_MEM don't need it, and without this exemption every
+    // OSER4_MEM instance demanded its sibling IOB slot be free too ("conflict with another IO"),
+    // exactly like the check_iologic_placement gap above.
+    if (ci.type.in(id_ODDR, id_ODDRC, id_OSER4, id_OSER4_MEM, id_IDDR, id_IDDRC, id_IDES4, id_IDES4_MEM,
+                    id_IOLOGICI_EMPTY, id_IOLOGICO_EMPTY)) {
         return nullptr;
     }
     IdString aux_name = gwu.create_aux_name(ci.name, idx);
