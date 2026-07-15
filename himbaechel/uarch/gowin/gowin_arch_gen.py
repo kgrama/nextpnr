@@ -881,6 +881,32 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                 tt.extra_data.io16_x_off = x_off
                 tt.extra_data.io16_y_off = y_off
 
+            # AUX io16 tiles (GW5AST-138C ttyp-246: dat char '1', NOT 'I') never go through
+            # create_io_tiletype (gated on db.tile_types['I']), so they never get the
+            # IOLOGICA/IOLOGICB bels pack_oser16/pack_ides16 bind their D12-D15/aux cell to at
+            # z=IOLOGICA_Z/+1 -- getBelByLocation(..., IOLOGICA_Z) returned a null BelId there and
+            # bindBel crashed (relptr assertion). MAIN tiles are always 'I'-classified in every
+            # fuzzed device so this only needs to run for AUX; the existing GW1N-9/GW1NS-4 tiles are
+            # a no-op here since their MAIN+AUX ttyps are BOTH 'I'-classified already.
+            if role == 'AUX':
+                for base_z, name in {(IOLOGICA_Z, 'IOLOGICA'), (IOLOGICA_Z + 1, 'IOLOGICB')}:
+                    if name not in db[y, x].bels:
+                        continue
+                    for off, io_type in {(0, 'O'), (2, 'I')}:
+                        iol = tt.create_bel(f"{name}{io_type}", f"IOLOGIC{io_type}", z = base_z + off)
+                        for port, wire in db[y, x].bels[name].portmap.items():
+                            if port == 'FCLK':
+                                wire = f'FCLK{name[-1]}'
+                            if not tt.has_wire(wire):
+                                if port in {'CLK', 'PCLK', 'MCLK'}:
+                                    tt.create_wire(wire, "TILE_CLK")
+                                else:
+                                    tt.create_wire(wire, "IOL_PORT")
+                            if port in {'Q', 'Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8', 'Q9', 'DF', 'LAG', 'LEAD'}:
+                                tt.add_bel_pin(iol, port, wire, PinType.OUTPUT)
+                            else:
+                                tt.add_bel_pin(iol, port, wire, PinType.INPUT)
+
             for io_type, z in {('IDES16', IDES16_Z), ('OSER16', OSER16_Z)}:
                 bel = tt.create_bel(io_type, io_type, z = z)
                 portmap = db[y, x].bels[io_type].portmap
