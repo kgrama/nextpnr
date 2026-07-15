@@ -884,7 +884,14 @@ void GowinPacker::pack_ides16(CellInfo &ci, std::vector<IdString> &nets_to_remov
     aux->setAttr(ctx->id("IOLOGIC_TYPE"), Property("DUMMY"));
     ci.copyPortTo(id_PCLK, aux, id_PCLK);
     ci.copyPortTo(id_RESET, aux, id_RESET);
-    ctx->bindBel(ctx->getBelByLocation(Loc(iob_loc.x, iob_loc.y, BelZ::IOLOGICA_Z)), aux,
+    // IOLOGICA_Z (+0) is the O-direction (IOLOGICO) bel that pack_oser16 claims for a
+    // co-located OSER16 on the same IOB (bidirectional pads, e.g. USB HS soft-PHY TX+RX on one
+    // pin, drive both an OSER16 and an IDES16 off the same IOB). IDES16 is an input macro, so it
+    // must target the I-direction (IOLOGICI) bel at IOLOGICA_Z+2 instead -- binding the same
+    // IOLOGICA_Z bel as pack_oser16 crashed (relptr assertion via a bindBel-on-already-bound-bel)
+    // whenever both existed on one IOB, which apicula's chipdb never previously modelled (only
+    // GW5AST-138C's OSER16/IDES16 do, added for the softphy CDR fix).
+    ctx->bindBel(ctx->getBelByLocation(Loc(iob_loc.x, iob_loc.y, BelZ::IOLOGICA_Z + 2)), aux,
                  PlaceStrength::STRENGTH_LOCKED);
 
     // make aux cell in the first cell
@@ -907,7 +914,9 @@ void GowinPacker::pack_ides16(CellInfo &ci, std::vector<IdString> &nets_to_remov
     ci.movePortTo(id_Q1, aux, id_Q7);
     ci.movePortTo(id_Q2, aux, id_Q8);
     ci.movePortTo(id_Q3, aux, id_Q9);
-    Loc next_io16(iob_loc.x + aux_offset.x, iob_loc.y + aux_offset.y, BelZ::IOLOGICA_Z);
+    // Same I-direction offset as the same-tile bind above (+2): keeps this AUX-tile cell out of
+    // a co-located OSER16's own AUX-tile bind (pack_oser16 uses the O-direction IOLOGICA_Z there).
+    Loc next_io16(iob_loc.x + aux_offset.x, iob_loc.y + aux_offset.y, BelZ::IOLOGICA_Z + 2);
     ctx->bindBel(ctx->getBelByLocation(next_io16), aux, PlaceStrength::STRENGTH_LOCKED);
 
     make_iob_nets(*in_iob);
