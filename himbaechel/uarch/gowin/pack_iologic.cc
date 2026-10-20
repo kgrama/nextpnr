@@ -70,6 +70,11 @@ void GowinPacker::check_iologic_placement(CellInfo &ci, Loc iob_loc, int diff /*
     if (ci.type.in(id_ODDR, id_ODDRC, id_IDDR, id_IDDRC, id_OSER4, id_OSER4_MEM, id_IOLOGICI_EMPTY, id_IOLOGICO_EMPTY) || diff) {
         return;
     }
+    // GW5A family: each IOLOGIC gears 8:1 on its own; the vendor DDR3 PHY bitstream for the
+    // GW5AST-138C places OSER8 on both the A and the B pad of one tile (e.g. IOL29A/B).
+    if (gwu.has_5A_HCLK()) {
+        return;
+    }
     BelId l_bel = ctx->getBelByLocation(Loc(iob_loc.x, iob_loc.y, BelZ::IOBA_Z + 1 - (iob_loc.z - BelZ::IOBA_Z)));
     if (!ctx->checkBelAvail(l_bel)) {
         log_error("Can't place %s at %s because it's already taken by %s\n", ctx->nameOf(&ci), ctx->nameOfBel(l_bel),
@@ -269,6 +274,12 @@ CellInfo *GowinPacker::create_aux_iologic_cell(CellInfo &ci, IdString mode, bool
                     id_IOLOGICI_EMPTY, id_IOLOGICO_EMPTY)) {
         return nullptr;
     }
+    // GW5A family: 8:1 gearing does not consume the paired A/B IOLOGIC slot (vendor GW5AST-138C
+    // DDR3 PHY places OSER8/OSER8_MEM/IDES8_MEM on both pads of one tile). The 16:1 macros keep
+    // their aux cell.
+    if (gwu.has_5A_HCLK() && !io16) {
+        return nullptr;
+    }
     IdString aux_name = gwu.create_aux_name(ci.name, idx);
     BelId bel = get_aux_iologic_bel(ci);
     BelId io_bel = gwu.get_io_bel_from_iologic(bel);
@@ -405,11 +416,22 @@ void GowinPacker::pack_ides_iol(CellInfo &ci, std::vector<IdString> &nets_to_rem
         break;
     }
     ci.setParam(ctx->id("INMODE"), in_mode);
-    // disconnect D input: it is wired internally
-    nets_to_remove.push_back(ci.getPort(in_port)->name);
-    in_iob->disconnectPort(id_O);
-    ci.disconnectPort(in_port);
+    // disconnect D input: it is wired internally. If the pad input also feeds fabric logic
+    // (the vendor GW5A DDR3 PHY samples the delayed DQ with LUTs next to IDES8_MEM), keep the
+    // IOB O net alive for those users and only detach the IOLOGIC.
+    NetInfo *d_net = ci.getPort(in_port);
+    bool d_has_other_users = d_net != nullptr && d_net->users.entries() > 1;
+    if (d_has_other_users) {
+        ci.disconnectPort(in_port);
+    } else {
+        nets_to_remove.push_back(d_net->name);
+        in_iob->disconnectPort(id_O);
+        ci.disconnectPort(in_port);
+    }
     if (ci.type == id_IOLOGICI_EMPTY) {
+        if (d_has_other_users) {
+            log_error("IOLOGIC %s: pad input net has other users, cannot pack an empty input IOLOGIC.\n", ctx->nameOf(&ci));
+        }
         if (ci.attrs.count(id_HAS_REG) == 0) {
             ci.movePortTo(id_Q, in_iob, id_O);
         }
