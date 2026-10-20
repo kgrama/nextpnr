@@ -1053,42 +1053,48 @@ struct GowinGlobalRouter
                 // gate wires to use.
                 WireId tb_wire, gate_wire, top_seg_wire, bottom_seg_wire, wire_to_isolate;
                 gwu.get_segment_wires(s_i, top_seg_wire, bottom_seg_wire);
-                tb_wire = top_seg_wire;
-                if (top_to_src <= bottom_to_src) {
-                    WireId gate_wire1;
-                    gwu.get_segment_top_gate_wires(s_i, gate_wire, gate_wire1);
-                    if (gate_wire == WireId()) {
-                        gate_wire = gate_wire1;
-                    }
-                    if (gate_wire == WireId()) {
-                        // This segment has no top gate wires, so we use one of the bottom ones.
-                        gwu.get_segment_bottom_gate_wires(s_i, gate_wire, gate_wire1);
-                        if (gate_wire == WireId()) {
-                            gate_wire = gate_wire1;
-                        }
-                        tb_wire = bottom_seg_wire;
-                        wire_to_isolate = top_seg_wire;
-                        NPNR_ASSERT(gate_wire != WireId()); // Completely isolated segment. The chip base is damaged.
-                    }
-                } else {
-                    WireId gate_wire1;
-                    tb_wire = bottom_seg_wire;
-                    wire_to_isolate = top_seg_wire;
-                    gwu.get_segment_bottom_gate_wires(s_i, gate_wire, gate_wire1);
-                    if (gate_wire == WireId()) {
-                        gate_wire = gate_wire1;
-                    }
-                    if (gate_wire == WireId()) {
-                        // This segment has no top gate wires, so we use one of the bottom ones.
-                        gwu.get_segment_top_gate_wires(s_i, gate_wire, gate_wire1);
-                        if (gate_wire == WireId()) {
-                            gate_wire = gate_wire1;
-                        }
-                        tb_wire = top_seg_wire;
-                        wire_to_isolate = WireId();
-                        NPNR_ASSERT(gate_wire != WireId()); // Completely isolated segment. The chip base is damaged.
-                    }
+                WireId top_g[2], bot_g[2];
+                gwu.get_segment_top_gate_wires(s_i, top_g[0], top_g[1]);
+                gwu.get_segment_bottom_gate_wires(s_i, bot_g[0], bot_g[1]);
+                // A gate wire is unusable if it is already bound or is a pin of a placed bel
+                // (e.g. B7 is BSRAM DI9 at some segment rows), since routing through it would
+                // steal that pin from the user net.
+                auto gate_usable = [&](WireId w) {
+                    if (!ctx->checkWireAvail(w))
+                        return false;
+                    for (BelPin bp : ctx->getWireBelPins(w))
+                        if (ctx->getBoundBelCell(bp.bel) != nullptr)
+                            return false;
+                    return true;
+                };
+                auto pick = [&](WireId *pair, bool strict) {
+                    for (int k = 0; k < 2; ++k)
+                        if (pair[k] != WireId() && (!strict || gate_usable(pair[k])))
+                            return pair[k];
+                    return WireId();
+                };
+                // Prefer the end nearer to the source, then the other end; first only gates that
+                // are free, then (as before) any existing gate.
+                bool prefer_top = top_to_src <= bottom_to_src;
+                WireId *first = prefer_top ? top_g : bot_g;
+                WireId *second = prefer_top ? bot_g : top_g;
+                bool use_top = prefer_top;
+                gate_wire = pick(first, true);
+                if (gate_wire == WireId()) {
+                    gate_wire = pick(second, true);
+                    use_top = !prefer_top;
                 }
+                if (gate_wire == WireId()) {
+                    use_top = prefer_top;
+                    gate_wire = pick(first, false);
+                }
+                if (gate_wire == WireId()) {
+                    gate_wire = pick(second, false);
+                    use_top = !prefer_top;
+                }
+                NPNR_ASSERT(gate_wire != WireId()); // Completely isolated segment. The chip base is damaged.
+                tb_wire = use_top ? top_seg_wire : bottom_seg_wire;
+                wire_to_isolate = use_top ? WireId() : top_seg_wire;
                 selected_nets.at(net).tb_wires[s_i] = tb_wire;
                 selected_nets.at(net).gate_wires[s_i] = gate_wire;
                 // store used wires for gowin_pack
