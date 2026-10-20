@@ -54,9 +54,33 @@ struct GowinCstReader
     BelId getConstrainedHCLKBel(std::smatch match, int maxX, int maxY)
     {
         int idx = std::stoi(match[3]);
+        std::string side = match[2].str();
+
+        // GW5AST-138C: SIDE[0..7] -> HCLK control cell + CLKDIV slot, measured with gw_sh
+        // (impl/fuzz/hclk): LEFT[0-3]->(x0,y27), LEFT[4-7]->(x0,y81), RIGHT likewise at x=181,
+        // BOTTOM[0-3]->(x64,y108), BOTTOM[4-7]->(x117,y108); slot = idx % 4.
+        {
+            int hx = -1, hy = -1;
+            bool hi = idx >= 4;
+            if (side == "LEFT" || side == "RIGHT") {
+                hx = (side == "LEFT") ? 0 : 181;
+                hy = hi ? 81 : 27;
+            } else if (side == "BOTTOM") {
+                hx = hi ? 117 : 64;
+                hy = 108;
+            }
+            if (hx >= 0) {
+                for (auto &bel : ctx->getBelsInBucket(ctx->getBelBucketForCellType(id_CLKDIV))) {
+                    auto this_loc = ctx->getBelLocation(bel);
+                    if (this_loc.x == hx && this_loc.y == hy && this_loc.z == BelZ::CLKDIV_0_Z + idx % 4)
+                        return bel;
+                }
+            }
+        }
+        if (idx > 1)
+            return BelId();
         int bel_z = BelZ::CLKDIV_0_Z + 2 * idx;
 
-        std::string side = match[2].str();
         bool lr = (side == "LEFT") || (side == "RIGHT");
         int y_coord = (side == "BOTTOM") ? maxY - 1 : 0;
         int x_coord = (side == "RIGHT") ? maxX - 1 : 0;
@@ -94,7 +118,7 @@ struct GowinCstReader
             std::regex inslocre =
                     std::regex("INS_LOC +\"([^\"]+)\" +R([0-9]+)C([0-9]+)\\[([0-9])\\]\\[([AB])\\] *;.*[\\s\\S]*");
             std::regex hclkre =
-                    std::regex("INS_LOC +\"([^\"]+)\" +(TOP|RIGHT|BOTTOM|LEFT)SIDE\\[([0,1])\\] *;*[\\s\\S]*");
+                    std::regex("INS_LOC +\"([^\"]+)\" +(TOP|RIGHT|BOTTOM|LEFT)SIDE\\[([0-7])\\] *;*[\\s\\S]*");
             // GW5AST-138C PLL site placement: INS_LOC "inst" PLL_L[0] / PLL_R[0] / PLL_B[0..3]
             std::regex pllre = std::regex("INS_LOC +\"([^\"]+)\" +PLL_([LRB])\\[([0-9])\\] *;*[\\s\\S]*");
             std::regex clockre = std::regex("CLOCK_LOC +\"([^\"]+)\" +BUF([GS])(\\[([0-7])\\])?[^;]*;.*[\\s\\S]*");
