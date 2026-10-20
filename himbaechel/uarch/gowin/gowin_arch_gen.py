@@ -123,6 +123,14 @@ _FUZZED_CELL_PORTS = {
     # gate doesn't dangle a "user port missing" connection, same shape as IODELAY's DLYSTEP.
     'DHCE': [('CLKIN','i'),('CEN','i'),('CLKOUT','o')],
 }
+# DDRDLL input pins on the bel's own tile wires (ttyp-48 pip tables: CLK0 <- X01-X04/N241,
+# LSR0/1/2 <- fabric X05-X08/N271/S271). Distinct LSR wire per control pin: one wire per sink.
+_DDRDLL_PIN_WIRE = {'CLKIN': 'CLK0', 'RESET': 'LSR0', 'STOP': 'LSR1', 'UPDNCNTL': 'LSR2'}
+_DLLSTEP_BUS = 'DLLSTEP_BUS'
+# DQS output pin -> measured exit Q wire of the DQS tile, keyed by (row, col) of the left-edge site
+# (ttyp 257/259). Measured by RVALID/RFLAG/WFLAG probes on gw_sh (group0 (9,0); RVALID also g6 (90,0),
+# g7 (99,0)). Other DQS sites (ttyp 241) are not measured and keep their fresh wires.
+_DQS_EXIT_Q = {site: {'RVALID': 'Q5', 'RFLAG': 'Q6', 'WFLAG': 'Q7'} for site in ((9, 0), (90, 0), (99, 0))}
 
 EMCU_Z      = 300
 
@@ -639,6 +647,22 @@ def create_nodes(chip: Chip, db: chipdb):
                 else:
                     gl_nodes.append(new_node)
 
+    # DDRDLL STEP[b] -> every DQS DLLSTEP[b]: one node per bit (dedicated link, see create_extra_funcs).
+    fuzzed_locs = {}
+    for (y, x), ef in db.extra_func.items():
+        for cellname in ef.get('fuzzed', {}):
+            fuzzed_locs.setdefault(cellname, []).append((x, y))
+    if fuzzed_locs.get('DDRDLL') and fuzzed_locs.get('DQS'):
+        # Fabric exit: STEP[b] is Q<b> of the tile east of the DDRDLL ((108,1), ttyp 256, no bel
+        # drives its Q wires). Measured on gw_sh probe step_dqs00_ff1 (impl/fuzz/ddr_dll): STEP[0]
+        # leaves on N800 <- Q0 at (108,1) (zero-fuse default) and runs N808 up column 1.
+        # step_dqs00_ff uses Q1..Q5, Q7 at (108,1) for the other bits; per-bit order beyond b=0
+        # is not separately probed.
+        for b in range(8):
+            global_nodes[f'{_DLLSTEP_BUS}{b}'] = [NodeWire(x, y, f'{_DLLSTEP_BUS}{b}')
+                for x, y in sorted(fuzzed_locs['DDRDLL']) + sorted(fuzzed_locs['DQS'])] + \
+                [NodeWire(x + 1, y, f'Q{b}') for x, y in sorted(fuzzed_locs['DDRDLL'])]
+
     for name, node in global_nodes.items():
         chip.add_node(node)
 
@@ -909,8 +933,26 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                     # Multi-bit pins expand to indexed bel pins pin[0..width-1]; 1-bit stay bare.
                     pin_names = [pin] if width == 1 else [f'{pin}[{b}]' for b in range(width)]
                     is_dqs_input = cellname == 'DQS' and pdir == 'i'
-                    for pn in pin_names:
+                    for bit, pn in enumerate(pin_names):
                         real_wire = _dqs_clk_pin_wire.get(pn) if cellname == 'DQS' else None
+                        if cellname == 'DDRDLL':
+                            real_wire = _DDRDLL_PIN_WIRE.get(pn)
+                        exit_q = _DQS_EXIT_Q.get((y, x), {}).get(pn) if cellname == 'DQS' and pdir == 'o' else None
+                        if exit_q is not None:
+                            if not tt.has_wire(exit_q):
+                                tt.create_wire(exit_q)
+                            tt.add_bel_pin(bel, pn, exit_q, PinType.OUTPUT)
+                            continue
+                        # DDRDLL STEP -> DQS DLLSTEP is a dedicated link: vendor PnR rejects a DQS whose
+                        # DLLSTEP is not driven by a DDRDLL (gw_sh PR0015, impl/fuzz/ddr_dll). Both pins
+                        # sit on DLLSTEP_BUS<bit>, joined across tiles in create_nodes().
+                        if (cellname, pin) in (('DDRDLL', 'STEP'), ('DQS', 'DLLSTEP')):
+                            wname = f'{_DLLSTEP_BUS}{bit}'
+                            if not tt.has_wire(wname):
+                                tt.create_wire(wname)
+                            tt.add_bel_pin(bel, pn, wname,
+                                           PinType.OUTPUT if pdir == 'o' else PinType.INPUT)
+                            continue
                         if real_wire is None and is_dqs_input and pin not in _dqs_clk_pin_wire:
                             real_wire = _dqs_fabric_pins[_dqs_fabric_idx[0]]
                             _dqs_fabric_idx[0] += 1

@@ -112,6 +112,7 @@ struct GowinImpl : HimbaechelAPI
     // Place explicityl constrained or implicitly constrained (by IOLOGIC) CLKDIV and CLKDIV2 cells
     // to avoid routing conflicts and maximize utilization
     void place_constrained_hclk_cells();
+    void place_constrained_dqs_cells();
     void place_5a_hclks(void);
 
     // bel placement validation
@@ -892,9 +893,48 @@ void GowinImpl::place_constrained_hclk_cells()
     }
 }
 
+// Measured DQS bel site per DDR DQS pad, keyed by the row of the left-edge pad (IOL<n> -> row n-1),
+// value (x=col, y=row) of the DQS bel. From gw_sh RVALID probes (impl/fuzz/ddr_dll): IOL4 -> (9,0),
+// IOL94 -> (90,0), IOL96 -> (99,0) have measured RVALID exits; IOL65 -> (81,6) and IOL69 -> (81,5)
+// come from the ttyp-241 site bit diffs only (exit not measured).
+static const std::map<int, std::pair<int, int>> dqs_site_by_pad_row = {
+        {3, {0, 9}}, {64, {6, 81}}, {68, {5, 81}}, {93, {0, 90}}, {95, {0, 99}}};
+
+// Binds each DQS cell to the measured site of the left-edge pad driving its DQSIN (cst BEL attribute).
+void GowinImpl::place_constrained_dqs_cells()
+{
+    for (auto &cell : ctx->cells) {
+        CellInfo *ci = cell.second.get();
+        if (ci->type != ctx->id("DQS"))
+            continue;
+        NetInfo *dqsin = ci->getPort(ctx->id("DQSIN"));
+        if (!dqsin || !dqsin->driver.cell)
+            continue;
+        const CellInfo *io = dqsin->driver.cell;
+        BelId pad = io->bel;
+        if (pad == BelId() && io->attrs.count(id_BEL))
+            pad = ctx->getBelByName(IdStringList::parse(ctx, io->attrs.at(id_BEL).as_string()));
+        if (pad == BelId() || ctx->getBelLocation(pad).x != 0)
+            continue;
+        auto site = dqs_site_by_pad_row.find(ctx->getBelLocation(pad).y);
+        if (site == dqs_site_by_pad_row.end())
+            continue;
+        for (auto bel : ctx->getBels()) {
+            Loc loc = ctx->getBelLocation(bel);
+            if (ctx->getBelType(bel) == ctx->id("DQS") && loc.x == site->second.first &&
+                loc.y == site->second.second && !ctx->getBoundBelCell(bel)) {
+                ctx->bindBel(bel, ci, PlaceStrength::STRENGTH_LOCKED);
+                log_info("DQS %s constrained to measured site (%d,%d)\n", ci->name.c_str(ctx), loc.x, loc.y);
+                break;
+            }
+        }
+    }
+}
+
 void GowinImpl::prePlace()
 {
     place_constrained_hclk_cells();
+    place_constrained_dqs_cells();
     ctx->assignArchInfo();
     assign_cell_info();
     fast_logic_cell.reset(ctx->getGridDimX(), ctx->getGridDimY());
