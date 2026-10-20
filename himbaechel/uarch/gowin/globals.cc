@@ -1371,7 +1371,7 @@ struct GowinGlobalRouter
         }
 
         // segmented nets
-        if (gwu.get_segments_count() != 0) {
+        if (gwu.get_segments_count() != 0 && !getenv("NEXTPNR_GOWIN_NO_SEGMENTS")) {
             route_segmented(seg_nets);
         }
 

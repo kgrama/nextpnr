@@ -181,6 +181,7 @@ void GowinPacker::pack_bi_output_iol(CellInfo &ci, std::vector<IdString> &nets_t
     } else { // disconnect TXx ports, ignore these nets
         switch (ci.type.hash()) {
         case ID_OSER8:
+        case ID_OSER8_MEM:
             ci.disconnectPort(id_TX3);
             ci.disconnectPort(id_TX2); /* fall-through */
         case ID_OSER4:
@@ -313,7 +314,14 @@ void GowinPacker::reconnect_ides_outs(CellInfo *ci)
         // gw_sh GW5AST-138C bitstream). TODO: IDES4/IDES10/IVIDEO oracles.
         switch (ci->type.hash()) {
         case ID_IDES8:
+        case ID_IDES8_MEM:
             for (int i = 0; i < 8; ++i) {
+                ci->renamePort(ctx->idf("Q%d", i), ctx->idf("Q%d", 8 + i));
+            }
+            break;
+        case ID_IDES4:
+        case ID_IDES4_MEM:
+            for (int i = 0; i < 4; ++i) {
                 ci->renamePort(ctx->idf("Q%d", i), ctx->idf("Q%d", 8 + i));
             }
             break;
@@ -669,7 +677,7 @@ void GowinPacker::pack_iodelay(void)
         } else {
             if (is_idelay) {
                 iob->disconnectPort(id_O);
-                ci.disconnectPort(id_I);
+                ci.disconnectPort(id_DI);
                 ci.movePortTo(id_DO, iob, id_O);
             } else {
                 IdString iol_out = di_net->driver.port;
