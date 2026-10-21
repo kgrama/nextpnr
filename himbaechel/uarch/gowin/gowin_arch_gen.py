@@ -131,6 +131,9 @@ _DLLSTEP_BUS = 'DLLSTEP_BUS'
 # (ttyp 257/259). Measured by RVALID/RFLAG/WFLAG probes on gw_sh (group0 (9,0); RVALID also g6 (90,0),
 # g7 (99,0)). Other DQS sites (ttyp 241) are not measured and keep their fresh wires.
 _DQS_EXIT_Q = {site: {'RVALID': 'Q5', 'RFLAG': 'Q6', 'WFLAG': 'Q7'} for site in ((9, 0), (90, 0), (99, 0))}
+# Unmeasured (ttyp 241) DQS sites: RBURST has no measured exit (Q4 is the unused slot next to Q5-Q7);
+# RVALID/RFLAG/WFLAG reuse the measured Q5-Q7 assignment. Unverified against silicon.
+_DQS_UNMEASURED_EXIT_Q = {'RBURST': 'Q4', 'RVALID': 'Q5', 'RFLAG': 'Q6', 'WFLAG': 'Q7'}
 
 EMCU_Z      = 300
 
@@ -937,7 +940,11 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                         real_wire = _dqs_clk_pin_wire.get(pn) if cellname == 'DQS' else None
                         if cellname == 'DDRDLL':
                             real_wire = _DDRDLL_PIN_WIRE.get(pn)
-                        exit_q = _DQS_EXIT_Q.get((y, x), {}).get(pn) if cellname == 'DQS' and pdir == 'o' else None
+                        exit_q = None
+                        if cellname == 'DDRDLL' and pdir == 'o' and pn == 'LOCK':
+                            exit_q = 'Q0'
+                        if cellname == 'DQS' and pdir == 'o':
+                            exit_q = _DQS_EXIT_Q.get((y, x), {}).get(pn, _DQS_UNMEASURED_EXIT_Q.get(pn))
                         if exit_q is not None:
                             if not tt.has_wire(exit_q):
                                 tt.create_wire(exit_q)

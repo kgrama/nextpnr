@@ -240,14 +240,27 @@ struct GowinCstReader
                         // Uses second pin after removing ','
                         pinlines[1] = std::regex_replace(match[3].str(), std::regex("^,"), "");
 
-                        // Replaces _p with _n in pinname.
-                        std::string tmp = std::regex_replace(match[1].str(), std::regex("_p$"), "_n");
+                        // Support differential partner naming (_p->_n, _dxp_->_dxn_, _dp_->_dn_, P->N)
+                        std::string base_name = match[1].str();
+                        std::string cand1 = std::regex_replace(base_name, std::regex("_p$"), "_n");
+                        std::string cand2 = std::regex_replace(base_name, std::regex("_dxp_"), "_dxn_");
+                        std::string cand3 = std::regex_replace(base_name, std::regex("_dp_"), "_dn_");
+                        std::string cand4 = std::regex_replace(base_name, std::regex("_p_"), "_n_");
+                        std::string cand5 = std::regex_replace(base_name, std::regex("P$"), "N");
 
-                        nets[1] = ctx->id(tmp);
-                        it = ctx->cells.find(nets[1]);
-                        if (cst_type != clock && it == ctx->cells.end()) {
-                            log_info("Cell %s not found\n", nets[1].c_str(ctx));
-                            continue;
+                        std::string neg_name = "";
+                        for (const auto &c : {cand1, cand2, cand3, cand4, cand5}) {
+                            if (c != base_name && ctx->cells.find(ctx->id(c)) != ctx->cells.end()) {
+                                neg_name = c;
+                                break;
+                            }
+                        }
+
+                        if (!neg_name.empty()) {
+                            nets[1] = ctx->id(neg_name);
+                        } else {
+                            // Single-ended sense or dummy partner pad; do not iterate second pin
+                            nb_iter = 1;
                         }
                     }
 
