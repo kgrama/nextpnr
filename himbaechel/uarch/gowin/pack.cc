@@ -533,11 +533,22 @@ void GowinPacker::pack_dhcens(void)
 void GowinPacker::pack_dhce(void)
 {
     log_info("Pack DHCE...\n");
+    auto buckets = ctx->getBelBuckets();
+    bool has_dhcen_bels = std::find(buckets.begin(), buckets.end(), id_DHCEN) != buckets.end();
+
     std::vector<IdString> cells_to_remove;
     std::vector<IdString> nets_to_remove;
     for (auto &cell : ctx->cells) {
         CellInfo &ci = *cell.second;
         if (ci.type != id_DHCE) {
+            continue;
+        }
+        if (has_dhcen_bels) {
+            ci.type = id_DHCEN;
+            if (ci.ports.count(id_CEN)) {
+                ci.renamePort(id_CEN, id_CE);
+            }
+            log_info("    convert %s to DHCEN\n", ctx->nameOf(&ci));
             continue;
         }
         if (ci.ports.count(id_CEN)) {

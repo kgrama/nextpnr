@@ -127,13 +127,49 @@ _FUZZED_CELL_PORTS = {
 # LSR0/1/2 <- fabric X05-X08/N271/S271). Distinct LSR wire per control pin: one wire per sink.
 _DDRDLL_PIN_WIRE = {'CLKIN': 'CLK0', 'RESET': 'LSR0', 'STOP': 'LSR1', 'UPDNCNTL': 'LSR2'}
 _DLLSTEP_BUS = 'DLLSTEP_BUS'
-# DQS output pin -> measured exit Q wire of the DQS tile, keyed by (row, col) of the left-edge site
-# (ttyp 257/259). Measured by RVALID/RFLAG/WFLAG probes on gw_sh (group0 (9,0); RVALID also g6 (90,0),
-# g7 (99,0)). Other DQS sites (ttyp 241) are not measured and keep their fresh wires.
-_DQS_EXIT_Q = {site: {'RVALID': 'Q5', 'RFLAG': 'Q6', 'WFLAG': 'Q7'} for site in ((9, 0), (90, 0), (99, 0))}
-# Unmeasured (ttyp 241) DQS sites: RBURST has no measured exit (Q4 is the unused slot next to Q5-Q7);
-# RVALID/RFLAG/WFLAG reuse the measured Q5-Q7 assignment. Unverified against silicon.
-_DQS_UNMEASURED_EXIT_Q = {'RBURST': 'Q4', 'RVALID': 'Q5', 'RFLAG': 'Q6', 'WFLAG': 'Q7'}
+# Silicon-measured DQS input pin -> local tile wire mapping on GW5AST-138C (identical across
+# edge ttyp 257/258/259/260/261/262/264/266/267/376/377 and interior ttyp 241 DQS tiles):
+_DQS_IN_PIN_WIRE = {
+    'PCLK':       'CLK0',
+    'FCLK':       'CLK1',
+    'RESET':      'LSR0',
+    'RDIR':       'A0',
+    'RLOADN':     'A1',
+    'RMOVE':      'A2',
+    'READ[0]':    'A3',
+    'READ[1]':    'A4',
+    'READ[2]':    'A5',
+    'READ[3]':    'A7',
+    'WDIR':       'B0',
+    'WLOADN':     'B1',
+    'WMOVE':      'B2',
+    'HOLD':       'B3',
+    'RCLKSEL[0]': 'C0',
+    'RCLKSEL[1]': 'C1',
+    'RCLKSEL[2]': 'C2',
+    'WSTEP[0]':   'D3',
+    'WSTEP[1]':   'D4',
+    'WSTEP[2]':   'D5',
+    'WSTEP[3]':   'D7',
+    'WSTEP[4]':   'CLK2',
+    'WSTEP[5]':   'LSR2',
+    'WSTEP[6]':   'CE1',
+    'WSTEP[7]':   'CE2',
+}
+# Silicon-measured DQS output pin -> local exit Q/F wire on GW5AST-138C (identical across
+# edge and interior ttyp 241 DQS tiles):
+_DQS_OUT_PIN_WIRE = {
+    'RVALID':    'Q5',
+    'RBURST':    'F6',
+    'RFLAG':     'Q6',
+    'WFLAG':     'Q7',
+    'RPOINT[0]': 'F2',
+    'RPOINT[1]': 'Q2',
+    'RPOINT[2]': 'F4',
+    'WPOINT[0]': 'F3',
+    'WPOINT[1]': 'Q3',
+    'WPOINT[2]': 'F5',
+}
 
 EMCU_Z      = 300
 
@@ -900,7 +936,8 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                 # of its ports.  The placer picked that phantom bel over the real IOLOGIC one for
                 # OSER4_MEM ("invalid sink port OSER4_MEM.PCLK" -- a bel with no PCLK pip at all,
                 # not a routing-coverage gap), so this is a hard skip, not just dead weight.
-                if cellname in ('OSER4_MEM', 'IDES4_MEM', 'OSER8_MEM', 'IDES8_MEM'):
+                if cellname in ('PLL', 'OSER4_MEM', 'IDES4_MEM', 'OSER8_MEM', 'IDES8_MEM',
+                                'IODELAY', 'DHCE', 'SDPB', 'DSP', 'DCS', 'USB_CDR_SERDES'):
                     continue
                 belz = _FUZZED_BEL_Z.get(cellname, FUZZED_Z_BASE + len(tt.bels))
                 bel = tt.create_bel(cellname, cellname, z = belz)
@@ -928,7 +965,6 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                 # that reaches the bel works, so there is no "correct" one to discover by fuzzing
                 # further, only "a working one".
                 _dqs_fabric_pins = [f'{b}{i}' for b in 'DBAC' for i in range(8)]
-                _dqs_clk_pin_wire = {'PCLK': 'CLK0', 'FCLK': 'CLK1', 'HOLD': 'LSR0'}
                 _dqs_fabric_idx = [0]
                 for pinspec in _FUZZED_CELL_PORTS.get(cellname, []):
                     pin, pdir = pinspec[0], pinspec[1]
@@ -937,14 +973,14 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                     pin_names = [pin] if width == 1 else [f'{pin}[{b}]' for b in range(width)]
                     is_dqs_input = cellname == 'DQS' and pdir == 'i'
                     for bit, pn in enumerate(pin_names):
-                        real_wire = _dqs_clk_pin_wire.get(pn) if cellname == 'DQS' else None
+                        real_wire = _DQS_IN_PIN_WIRE.get(pn) if (cellname == 'DQS' and pdir == 'i') else None
                         if cellname == 'DDRDLL':
                             real_wire = _DDRDLL_PIN_WIRE.get(pn)
                         exit_q = None
                         if cellname == 'DDRDLL' and pdir == 'o' and pn == 'LOCK':
                             exit_q = 'Q0'
                         if cellname == 'DQS' and pdir == 'o':
-                            exit_q = _DQS_EXIT_Q.get((y, x), {}).get(pn, _DQS_UNMEASURED_EXIT_Q.get(pn))
+                            exit_q = _DQS_OUT_PIN_WIRE.get(pn)
                         if exit_q is not None:
                             if not tt.has_wire(exit_q):
                                 tt.create_wire(exit_q)
@@ -960,7 +996,7 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                             tt.add_bel_pin(bel, pn, wname,
                                            PinType.OUTPUT if pdir == 'o' else PinType.INPUT)
                             continue
-                        if real_wire is None and is_dqs_input and pin not in _dqs_clk_pin_wire:
+                        if real_wire is None and is_dqs_input and pn != 'DQSIN':
                             real_wire = _dqs_fabric_pins[_dqs_fabric_idx[0]]
                             _dqs_fabric_idx[0] += 1
                         if real_wire is not None:
@@ -971,7 +1007,7 @@ def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
                             # the later one just adds pips into the same wire.
                             wname = real_wire
                             if not tt.has_wire(wname):
-                                tt.create_wire(wname, "TILE_CLK")
+                                tt.create_wire(wname, "TILE_CLK" if wname.startswith("CLK") else "")
                         else:
                             wname = f'{cellname}_{pn}_X{x}Y{y}'
                             if not tt.has_wire(wname):

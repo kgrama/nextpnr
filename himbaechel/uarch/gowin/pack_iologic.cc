@@ -747,21 +747,48 @@ void GowinPacker::pack_iodelay(void)
 void GowinPacker::pack_dqs(void)
 {
     log_info("Pack DQS...\n");
-    static const std::array<IdString, 7> tied_ports = {id_WSTEP, id_RLOADN, id_RMOVE,
-                                                         id_RDIR,  id_WLOADN, id_WMOVE, id_WDIR};
+    static const std::array<IdString, 7> const_ctrl_ports = {id_WSTEP, id_RLOADN, id_RMOVE,
+                                                             id_RDIR,  id_WLOADN, id_WMOVE, id_WDIR};
     for (auto &cell : ctx->cells) {
         CellInfo &ci = *cell.second;
         if (ci.type != id_DQS) {
             continue;
         }
+        // Record the pad driving DQSIN for place_constrained_dqs_cells() before disconnecting
+        // the dedicated IOB->DQSIN hard link (and disconnecting IOB.O if DQSIN was its only sink).
+        if (NetInfo *dqsin = ci.getPort(ctx->id("DQSIN"))) {
+            if (CellInfo *io = dqsin->driver.cell) {
+                if (io->bel != BelId()) {
+                    ci.setAttr(ctx->id("DQS_PAD_BEL"), ctx->getBelName(io->bel).str(ctx));
+                } else if (io->attrs.count(id_BEL)) {
+                    ci.setAttr(ctx->id("DQS_PAD_BEL"), io->attrs.at(id_BEL));
+                }
+                if (dqsin->users.entries() == 1 && io->ports.count(id_O) && io->getPort(id_O) == dqsin) {
+                    io->disconnectPort(id_O);
+                }
+            }
+            ci.disconnectPort(ctx->id("DQSIN"));
+        }
+        // DQSR90 / DQSW0 / DQSW270 are dedicated hard-wired strobe clock buses to IDES*_MEM.ICLK
+        // and OSER*_MEM.TCLK (which pack_ides_iol / pack_bi_output_iol disconnect on the sink side).
+        for (const char *p : {"DQSR90", "DQSW0", "DQSW270"}) {
+            IdString pid = ctx->id(p);
+            if (ci.ports.count(pid)) {
+                ci.disconnectPort(pid);
+            }
+        }
         std::vector<IdString> to_drop;
         for (auto &port : ci.ports) {
             std::string pname = port.first.str(ctx);
-            for (IdString base : tied_ports) {
+            for (IdString base : const_ctrl_ports) {
                 std::string bname = base.str(ctx);
                 // exact match (1-bit ports) or "BASE[" prefix match (multi-bit ports, e.g. WSTEP[7:0])
                 if (pname == bname || (pname.compare(0, bname.size(), bname) == 0 && pname[bname.size()] == '[')) {
-                    to_drop.push_back(port.first);
+                    NetInfo *net = port.second.net;
+                    // Only drop when tied to $PACKER_GND / $PACKER_VCC (keep dynamic fabric-driven control nets)
+                    if (!net || net->name == ctx->id("$PACKER_GND") || net->name == ctx->id("$PACKER_VCC")) {
+                        to_drop.push_back(port.first);
+                    }
                     break;
                 }
             }

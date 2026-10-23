@@ -602,6 +602,49 @@ void GowinImpl::place_5a_hclks(void)
         }
         ctx->cells[ncell->name] = std::move(ncell);
     }
+
+    // Place standalone CLKDIV cells (not driven by CLKDIV2) that share HCLKIN with IOLOGIC FCLK
+    for (auto &cell : ctx->cells) {
+        CellInfo *ci = cell.second.get();
+        if (!is_clkdiv(ci) || ci->bel != BelId() || ci->cluster != ClusterId()) {
+            continue;
+        }
+        if (ci->attrs.count(id_BEL)) {
+            BelId constrained_bel = ctx->getBelByName(IdStringList::parse(ctx, ci->attrs.at(id_BEL).as_string()));
+            if (constrained_bel != BelId() && ctx->getBelType(constrained_bel) == id_CLKDIV) {
+                ctx->bindBel(constrained_bel, ci, PlaceStrength::STRENGTH_LOCKED);
+            }
+            continue;
+        }
+        NetInfo *hclkin_net = ci->getPort(id_HCLKIN);
+        if (!hclkin_net) {
+            continue;
+        }
+        int target_hclk_idx = -1;
+        for (auto &user : hclkin_net->users) {
+            if ((is_iologico(user.cell) || is_iologici(user.cell)) && user.cell->bel != BelId()) {
+                Loc user_loc = ctx->getBelLocation(user.cell->bel);
+                int hclk_idx = gwu.get_hclk_for_io(user_loc);
+                if (hclk_idx != -1) {
+                    target_hclk_idx = hclk_idx;
+                    break;
+                }
+            }
+        }
+        if (target_hclk_idx != -1) {
+            std::vector<Loc> div2_locs;
+            gwu.get_clkdiv2_locs(target_hclk_idx, div2_locs);
+            std::sort(div2_locs.begin(), div2_locs.end(), [](const Loc &a, const Loc &b) { return a.z < b.z; });
+            for (const Loc &d2loc : div2_locs) {
+                Loc clkdiv_loc(d2loc.x, d2loc.y, d2loc.z - BelZ::CLKDIV2_0_Z + BelZ::CLKDIV_0_Z);
+                BelId bel = ctx->getBelByLocation(clkdiv_loc);
+                if (bel != BelId() && ctx->checkBelAvail(bel)) {
+                    ctx->bindBel(bel, ci, PlaceStrength::STRENGTH_LOCKED);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /*
@@ -893,31 +936,48 @@ void GowinImpl::place_constrained_hclk_cells()
     }
 }
 
-// Measured DQS bel site per DDR DQS pad, keyed by the row of the left-edge pad (IOL<n> -> row n-1),
-// value (x=col, y=row) of the DQS bel. From gw_sh RVALID probes (impl/fuzz/ddr_dll): IOL4 -> (9,0),
-// IOL94 -> (90,0), IOL96 -> (99,0) have measured RVALID exits; IOL65 -> (81,6) and IOL69 -> (81,5)
-// come from the ttyp-241 site bit diffs only (exit not measured).
-static const std::map<int, std::pair<int, int>> dqs_site_by_pad_row = {
-        {3, {0, 9}}, {64, {6, 81}}, {68, {5, 81}}, {93, {0, 90}}, {95, {0, 99}}};
+// Silicon-measured DQS bel site per DDR DQS pad across all 23 package-present DQS groups on GW5AST-138C,
+// keyed by (pad_x, pad_y) -> (dqs_x, dqs_y) (where x=col, y=row, 0-based):
+//   Left edge (x=0):   IOL4(0,3)->(0,9), IOL22(0,21)->(0,18), IOL35(0,34)->(0,36), IOL49(0,48)->(5,27),
+//                      IOL65(0,64)->(6,81), IOL69(0,68)->(5,81), IOL94(0,93)->(0,90), IOL96(0,95)->(0,99)
+//   Bottom edge (y=108): IOB56(55,108)->(54,108), IOB70(69,108)->(63,108), IOB89(88,108)->(81,108),
+//                        IOB104(103,108)->(100,108), IOB110(109,108)->(118,108), IOB131(130,108)->(127,108),
+//                        IOB135(134,108)->(136,108)
+//   Right edge (x=181): IOR103(181,102)->(181,99), IOR89(181,88)->(181,90), IOR76(181,75)->(176,81),
+//                       IOR58(181,57)->(175,81), IOR44(181,43)->(176,27), IOR35(181,34)->(181,36),
+//                       IOR20(181,19)->(181,18), IOR8(181,7)->(181,9)
+static const std::map<std::pair<int, int>, std::pair<int, int>> dqs_site_by_pad_xy = {
+        {{0, 3}, {0, 9}},       {{0, 21}, {0, 18}},     {{0, 34}, {0, 36}},     {{0, 48}, {5, 27}},
+        {{0, 64}, {6, 81}},     {{0, 68}, {5, 81}},     {{0, 93}, {0, 90}},     {{0, 95}, {0, 99}},
+        {{55, 108}, {54, 108}}, {{69, 108}, {63, 108}}, {{88, 108}, {81, 108}}, {{103, 108}, {100, 108}},
+        {{109, 108}, {118, 108}}, {{130, 108}, {127, 108}}, {{134, 108}, {136, 108}},
+        {{181, 102}, {181, 99}}, {{181, 88}, {181, 90}}, {{181, 75}, {176, 81}}, {{181, 57}, {175, 81}},
+        {{181, 43}, {176, 27}}, {{181, 34}, {181, 36}}, {{181, 19}, {181, 18}}, {{181, 7}, {181, 9}}};
 
-// Binds each DQS cell to the measured site of the left-edge pad driving its DQSIN (cst BEL attribute).
+// Binds each DQS cell to the measured site of the pad driving its DQSIN (cst BEL attribute).
 void GowinImpl::place_constrained_dqs_cells()
 {
     for (auto &cell : ctx->cells) {
         CellInfo *ci = cell.second.get();
         if (ci->type != ctx->id("DQS"))
             continue;
-        NetInfo *dqsin = ci->getPort(ctx->id("DQSIN"));
-        if (!dqsin || !dqsin->driver.cell)
+        BelId pad;
+        if (ci->attrs.count(ctx->id("DQS_PAD_BEL"))) {
+            pad = ctx->getBelByName(IdStringList::parse(ctx, ci->attrs.at(ctx->id("DQS_PAD_BEL")).as_string()));
+        } else {
+            NetInfo *dqsin = ci->getPort(ctx->id("DQSIN"));
+            if (dqsin && dqsin->driver.cell) {
+                const CellInfo *io = dqsin->driver.cell;
+                pad = io->bel;
+                if (pad == BelId() && io->attrs.count(id_BEL))
+                    pad = ctx->getBelByName(IdStringList::parse(ctx, io->attrs.at(id_BEL).as_string()));
+            }
+        }
+        if (pad == BelId())
             continue;
-        const CellInfo *io = dqsin->driver.cell;
-        BelId pad = io->bel;
-        if (pad == BelId() && io->attrs.count(id_BEL))
-            pad = ctx->getBelByName(IdStringList::parse(ctx, io->attrs.at(id_BEL).as_string()));
-        if (pad == BelId() || ctx->getBelLocation(pad).x != 0)
-            continue;
-        auto site = dqs_site_by_pad_row.find(ctx->getBelLocation(pad).y);
-        if (site == dqs_site_by_pad_row.end())
+        Loc pad_loc = ctx->getBelLocation(pad);
+        auto site = dqs_site_by_pad_xy.find({pad_loc.x, pad_loc.y});
+        if (site == dqs_site_by_pad_xy.end())
             continue;
         for (auto bel : ctx->getBels()) {
             Loc loc = ctx->getBelLocation(bel);

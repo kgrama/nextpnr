@@ -598,9 +598,11 @@ struct GowinGlobalRouter
 
             // The control network must connect the CE inputs of all hardware dhcens.
             hw_dhcen->setAttr(id_DHCEN_USED, 1);
-            dhcen_ci->copyPortTo(id_CE, hw_dhcen, id_CE);
+            if (!hw_dhcen->ports.at(id_CE).net) {
+                dhcen_ci->copyPortTo(id_CE, hw_dhcen, id_CE);
+            }
         }
-        if (gwu.driver_is_mipi(driver)) {
+        if (ctx->getBoundWireNet(src) == nullptr) {
             ctx->bindWire(src, net_before_dhcen, STRENGTH_LOCKED);
         }
 
